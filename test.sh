@@ -103,15 +103,13 @@ EOF
 # 自动获取最快 GitHub 镜像（xiake.pro 测速接口）
 # ==========================
 get_fastest_gh_mirror() {
+  # 临时关闭严格退出，防止接口波动导致脚本退出
+  set +e
+
   echo -e "\n${GREEN}[Git加速] 正在获取最优 GitHub 镜像...${NC}"
-  
-  # 安装 json 解析工具 jq
-  if ! command -v jq &> /dev/null; then
-    sudo apt install -y jq >/dev/null 2>&1
-  fi
 
   # 请求测速接口，取速度最快、speed>0 的镜像
-  BEST_MIRROR=$(curl -s --connect-timeout 10 --max-time 15 "$GITHUB_API_URL" | \
+  BEST_MIRROR=$(curl -s --connect-timeout 8 --max-time 12 "$GITHUB_API_URL" 2>/dev/null | \
     jq -r '.data | map(select(.speed > 0)) | sort_by(.speed) | reverse | .[0].url' 2>/dev/null || true)
 
   # 兜底备用镜像
@@ -121,6 +119,9 @@ get_fastest_gh_mirror() {
   else
     echo -e "${GREEN}已自动选择最快镜像：$BEST_MIRROR${NC}"
   fi
+
+  # 恢复严格模式
+  set -e
 }
 
 # ==========================
@@ -170,7 +171,7 @@ if pgrep -f "ql" >/dev/null 2>&1; then
   pkill -f ql || true
 fi
 
-# 4. 安装系统依赖
+# 4. 安装系统依赖（提前安装 jq，避免中途安装报错退出）
 echo -e "${GREEN}[3/10] 更新系统&安装必备依赖${NC}"
 sudo apt clean
 sudo apt update -y

@@ -103,26 +103,31 @@ EOF
 # 自动获取最快 GitHub 镜像（xiake.pro 测速接口）
 # ==========================
 get_fastest_gh_mirror() {
-  # 临时关闭严格退出，防止接口波动导致脚本退出
+  # 彻底关闭严格模式，防止管道任何一步报错退出
   set +e
+  set +o pipefail
 
   echo -e "\n${GREEN}[Git加速] 正在获取最优 GitHub 镜像...${NC}"
 
-  # 请求测速接口，取速度最快、speed>0 的镜像
-  BEST_MIRROR=$(curl -s --connect-timeout 8 --max-time 12 "$GITHUB_API_URL" 2>/dev/null | \
-    jq -r '.data | map(select(.speed > 0)) | sort_by(.speed) | reverse | .[0].url' 2>/dev/null || true)
+  # 单独请求，保存到变量，避免管道退出
+  JSON_RESP=$(curl -s --connect-timeout 10 --max-time 15 "$GITHUB_API_URL" 2>/dev/null)
 
-  # 兜底备用镜像
+  # 用 jq 解析，只取 speed>0 并按速度倒序
+  BEST_MIRROR=$(echo "$JSON_RESP" | jq -r '.data | map(select(.speed > 0)) | sort_by(.speed) | reverse | .[0].url' 2>/dev/null)
+
+  # 兜底
   if [ -z "$BEST_MIRROR" ] || [ "$BEST_MIRROR" = "null" ]; then
     BEST_MIRROR="https://fastgit.cc"
-    echo -e "${YELLOW}镜像接口请求失败，使用备用镜像：$BEST_MIRROR${NC}"
+    echo -e "${YELLOW}镜像接口自动选择失败，使用稳定备用镜像：$BEST_MIRROR${NC}"
   else
     echo -e "${GREEN}已自动选择最快镜像：$BEST_MIRROR${NC}"
   fi
 
   # 恢复严格模式
+  set -o pipefail
   set -e
 }
+
 
 # ==========================
 # 应用 Git 全局加速
@@ -171,7 +176,7 @@ if pgrep -f "ql" >/dev/null 2>&1; then
   pkill -f ql || true
 fi
 
-# 4. 安装系统依赖（提前安装 jq，避免中途安装报错退出）
+# 4. 安装系统依赖
 echo -e "${GREEN}[3/10] 更新系统&安装必备依赖${NC}"
 sudo apt clean
 sudo apt update -y
@@ -192,10 +197,9 @@ NODE_V=$(node -v)
 NPM_V=$(npm -v)
 echo -e "${GREEN}Node版本：$NODE_V | NPM版本：$NPM_V${NC}"
 
-# 6. NPM 加速
+# 6. NPM 加速（已删除无效的 disturl）
 echo -e "${GREEN}[5/10] 切换NPM国内镜像&修复权限${NC}"
 npm config set registry https://registry.npmmirror.com/
-npm config set disturl https://npmmirror.com/dist
 sudo chown -R $USER:$USER ~/.npm
 sudo chmod -R 755 ~/.npm
 

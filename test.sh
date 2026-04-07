@@ -1,181 +1,252 @@
 #!/bin/bash
-set -eo pipefail
+# ==================================================
+# 青龙面板 WSL1 专用部署脚本（日志还原版）
+# 适配 Ubuntu 20.04 | Node.js 20.x
+# 适用于无 Docker 环境的 WSL1 或纯 Linux 系统
+# 作者：根据日志还原
+# 版本：v1.0
+# ==================================================
 
-# ========== 彩色输出 ==========
+set -e  # 遇到错误立即退出
+
+# 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-# ========== 全局变量（日志真实值） ==========
-QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-QL_DATA_DIR="/ql/data"
-NODE_VERSION=20
-GIT_MIRROR="https://gh.llkk.cc"
-NPM_MIRROR="https://registry.npmmirror.com"
-
-# ==========================
-# 工具函数：系统环境检测
-# ==========================
-env_check() {
-  echo -e "${GREEN}[环境预检] 正在检测系统信息...${NC}"
-  . /etc/os-release
-  ARCH=$(dpkg --print-architecture)
-  echo -e "${BLUE}  OS:        $PRETTY_NAME${NC}"
-  echo -e "${BLUE}  Arch:      $ARCH${NC}"
-
-  if uname -r | grep -qiw "wsl2"; then
-    echo -e "${RED}❌ 错误：当前为WSL2，脚本仅支持WSL1！${NC}"
-    exit 1
-  fi
-  echo -e "${GREEN}✅ WSL1 环境校验通过${NC}"
+# 日志函数
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
 }
 
-# ==========================
-# 清理旧环境（日志操作）
-# ==========================
-clean_old_env() {
-  echo -e "\n${GREEN}[清理] 清空旧环境与缓存${NC}"
-  pkill -f qinglong || true
-  pkill -f pm2 || true
-  pm2 stop all 2>/dev/null || true
-  pm2 delete all 2>/dev/null || true
-
-  npm cache clean --force 2>/dev/null || true
-  rm -rf ~/.npm /root/.pm2 /ql 2>/dev/null || true
-
-  npm uninstall -g @whyour/qinglong node-pre-gyp pnpm pm2 2>/dev/null || true
-  mkdir -p ${QL_DATA_DIR}
-  echo -e "${GREEN}✅ 旧环境清理完成${NC}"
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# ==========================
-# 安装系统依赖（日志原版）
-# ==========================
-install_deps() {
-  echo -e "\n${GREEN}[1/8] 更新系统&安装必备依赖${NC}"
-  apt update -y
-  apt upgrade -y
-  apt install -y iproute2 make python-is-python3 python3 build-essential curl git jq libsqlite3-dev libssl-dev lsof wget python3-pip ccache gcc g++ --no-install-recommends
-  apt autoremove -y
-  echo -e "${GREEN}✅ 系统依赖安装完成${NC}"
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# ==========================
-# 安装Node.js（日志原版：nodesource源）
-# ==========================
-install_node() {
-  echo -e "\n${GREEN}[2/8] 安装Node.js ${NODE_VERSION}.x LTS${NC}"
-  curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash
-  apt install -y nodejs
-
-  NODE_V=$(node -v)
-  NPM_V=$(npm -v)
-  echo -e "${GREEN}✅ Node版本：$NODE_V | NPM版本：$NPM_V${NC}"
+# 检查是否为 root 用户
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "请使用 root 用户运行此脚本！"
+        exit 1
+    fi
 }
 
-# ==========================
-# 配置国内镜像（日志原版：强制HTTPS，禁用SSH拉取）
-# ==========================
-set_mirrors() {
-  echo -e "\n${GREEN}[3/8] 配置国内镜像（Git/NPM/PIP）${NC}"
-  # PIP阿里源（日志原版）
-  mkdir -p ~/.pip
-  tee ~/.pip/pip.conf <<EOF >/dev/null
-[global]
-index-url = https://mirrors.aliyun.com/pypi/simple/
-trusted-host = mirrors.aliyun.com
-EOF
-  # 日志关键：全局Git加速+禁用SSH，强制走HTTPS镜像
-  git config --global url."${GIT_MIRROR}/".insteadOf "https://github.com/"
-  git config --global url."${GIT_MIRROR}/".insteadOf "ssh://git@github.com/"
-  git config --global url."${GIT_MIRROR}/".insteadOf "git@github.com:"
-  # NPM镜像
-  npm config set registry ${NPM_MIRROR}
-  echo -e "${GREEN}✅ 镜像配置完成${NC}"
+# 环境预检
+check_environment() {
+    log_info "========== 环境预检 =========="
+    
+    # 检测系统
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        log_info "系统: $NAME $VERSION"
+        log_info "架构: $(uname -m)"
+    else
+        log_warn "无法检测系统信息"
+    fi
+
+    # 检测 WSL1（可选）
+    if [[ $(uname -r) == *Microsoft* ]]; then
+        log_info "检测到 WSL1 环境"
+    else
+        log_warn "未检测到 WSL1 环境，继续执行..."
+    fi
 }
 
-# ==========================
-# 安装编译工具（日志原版：仅node-pre-gyp pnpm）
-# ==========================
-install_build_tools() {
-  echo -e "\n${GREEN}[4/8] 安装编译工具${NC}"
-  # 严格按日志：仅安装node-pre-gyp pnpm，无其他额外包
-  npm install -g node-pre-gyp pnpm
-  echo -e "${GREEN}✅ 编译工具安装完成${NC}"
+# 清理旧环境
+clean_old() {
+    log_info "========== 清理旧环境 =========="
+    
+    # 停止青龙服务（如果存在）
+    if command -v pm2 &> /dev/null; then
+        pm2 delete qinglong 2>/dev/null || true
+        pm2 save --force 2>/dev/null || true
+    fi
+    
+    # 清理 npm 全局包
+    npm uninstall -g @whyour/qinglong 2>/dev/null || true
+    
+    # 清理数据目录（谨慎操作）
+    # rm -rf /ql/data  # 如需全新安装可取消注释
+    
+    log_info "旧环境清理完成"
 }
 
-# ==========================
-# 安装青龙面板（日志原版成功命令）
-# ==========================
+# 更新系统并安装依赖
+install_dependencies() {
+    log_info "========== 更新系统 & 安装必备依赖 =========="
+    
+    apt-get update -y
+    apt-get upgrade -y
+    
+    # 安装基础依赖
+    apt-get install -y git curl wget tzdata perl openssl jq nginx procps netcat-openbsd openssh-client
+    
+    log_info "系统依赖安装完成"
+}
+
+# 安装 Node.js 20.x
+install_nodejs() {
+    log_info "========== 安装 Node.js 20.x LTS =========="
+    
+    # 添加 NodeSource 源
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    
+    # 安装 Node.js
+    apt-get install -y nodejs
+    
+    # 验证安装
+    node_version=$(node -v)
+    npm_version=$(npm -v)
+    log_info "Node版本：$node_version | NPM版本：$npm_version"
+}
+
+# 配置国内镜像
+setup_mirrors() {
+    log_info "========== 配置国内镜像（Git/NPM/PIP） =========="
+    
+    # 配置 npm 镜像
+    npm config set registry https://registry.npmmirror.com
+    
+    # 配置 git（可选）
+    git config --global url."https://ghproxy.com/https://github.com".insteadOf "https://github.com" 2>/dev/null || true
+    
+    log_info "镜像配置完成"
+}
+
+# 安装青龙面板
 install_qinglong() {
-  echo -e "\n${GREEN}[5/8] 清理NPM缓存并安装青龙面板${NC}"
-  # 日志关键操作：清理缓存
-  npm cache clean --force
-  # 日志核心修复：必加 --unsafe-perm，首次成功就是用的这个命令
-  npm install -g --unsafe-perm @whyour/qinglong
-
-  # 配置环境变量（日志原版）
-  echo "export QL_DIR=${QL_DIR}" | tee -a /etc/profile >/dev/null
-  echo "export QL_DATA_DIR=${QL_DATA_DIR}" | tee -a /etc/profile >/dev/null
-  source /etc/profile
-  echo -e "${GREEN}✅ 环境变量配置完成${NC}"
+    log_info "========== 安装青龙面板 =========="
+    
+    # 全局安装青龙
+    npm install -g @whyour/qinglong
+    
+    # 设置环境变量
+    export QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+    export QL_DATA_DIR="/ql/data"
+    
+    # 永久写入环境变量（可选）
+    echo "export QL_DIR=$QL_DIR" >> /etc/profile
+    echo "export QL_DATA_DIR=$QL_DATA_DIR" >> /etc/profile
+    source /etc/profile
+    
+    log_info "青龙面板安装完成"
 }
 
-# ==========================
-# 启动青龙（日志原版：直接执行qinglong）
-# ==========================
-start_qinglong() {
-  echo -e "\n${GREEN}[6/8] 启动青龙面板${NC}"
-  # 日志无qinglong start，直接执行qinglong
-  qinglong
-  sleep 20
-  if pgrep -f "qinglong" >/dev/null; then
-    echo -e "${GREEN}🎉 青龙面板启动成功！${NC}"
-  else
-    echo -e "${RED}❌ 启动失败！${NC}"
-    exit 1
-  fi
+# 初始化青龙目录结构
+init_qinglong_dirs() {
+    log_info "========== 初始化青龙目录结构 =========="
+    
+    # 创建必要目录
+    mkdir -p /ql/data/config
+    mkdir -p /ql/data/log
+    mkdir -p /ql/data/db
+    mkdir -p /ql/data/scripts
+    mkdir -p /ql/data/log/.tmp
+    mkdir -p /ql/data/repo
+    mkdir -p /ql/data/raw
+    mkdir -p /ql/data/log/update
+    mkdir -p /ql/data/deps
+    
+    # 复制配置文件（如果不存在）
+    QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+    
+    [[ ! -s /ql/data/config/config.sh ]] && cp -f $QL_DIR/sample/config.sample.sh /ql/data/config/config.sh
+    [[ ! -f /ql/data/config/task_before.sh ]] && cp -f $QL_DIR/sample/task.sample.sh /ql/data/config/task_before.sh
+    [[ ! -f /ql/data/config/task_after.sh ]] && cp -f $QL_DIR/sample/task.sample.sh /ql/data/config/task_after.sh
+    [[ ! -f /ql/data/config/extra.sh ]] && cp -f $QL_DIR/sample/extra.sample.sh /ql/data/config/extra.sh
+    [[ ! -s /ql/data/scripts/notify.py ]] && cp -f $QL_DIR/sample/notify.py /ql/data/scripts/notify.py
+    [[ ! -s /ql/data/scripts/sendNotify.js ]] && cp -f $QL_DIR/sample/notify.js /ql/data/scripts/sendNotify.js
+    [[ ! -s /ql/data/scripts/ql_sample.js ]] && cp -f $QL_DIR/sample/ql_sample.js /ql/data/scripts/ql_sample.js
+    [[ ! -s /ql/data/scripts/ql_sample.py ]] && cp -f $QL_DIR/sample/ql_sample.py /ql/data/scripts/ql_sample.py
+    [[ ! -s /ql/data/deps/sendNotify.js ]] && cp -f $QL_DIR/sample/notify.js /ql/data/deps/sendNotify.js
+    [[ ! -s /ql/data/deps/notify.py ]] && cp -f $QL_DIR/sample/notify.py /ql/data/deps/notify.py
+    
+    log_info "目录结构初始化完成"
 }
 
-# ==========================
-# 开机自启（日志原版）
-# ==========================
-set_autostart() {
-  echo -e "\n${GREEN}[7/8] 配置开机自启${NC}"
-  pm2 startup systemd
-  pm2 save
-  echo -e "${GREEN}✅ 自启配置完成${NC}"
+# 启动服务
+start_services() {
+    log_info "========== 启动服务 =========="
+    
+    # 启动 nginx
+    systemctl start nginx || service nginx start
+    systemctl enable nginx 2>/dev/null || true
+    
+    # 启动青龙面板
+    log_info "启动青龙面板..."
+    
+    # 进入青龙目录
+    cd /usr/lib/node_modules/@whyour/qinglong
+    
+    # 安装 PM2（如果未安装）
+    if ! command -v pm2 &> /dev/null; then
+        npm install -g pm2
+    fi
+    
+    # 启动青龙
+    pm2 start /usr/lib/node_modules/@whyour/qinglong/shell/start.sh --name qinglong
+    
+    # 保存 PM2 配置
+    pm2 save
+    pm2 startup 2>/dev/null || true
+    
+    log_info "服务启动完成"
 }
 
-# ==========================
-# 输出信息
-# ==========================
-show_info() {
-  echo -e "\n${GREEN}==================================================${NC}"
-  WSL_IP=$(hostname -I | awk '{print $1}')
-  echo -e "${GREEN}✅ 访问地址：${YELLOW}http://${WSL_IP}:5700${NC}"
-  echo -e "${GREEN}✅ 查看账号密码：${YELLOW}cat ${QL_DATA_DIR}/config/auth.json${NC}"
-  echo -e "${GREEN}==================================================${NC}"
+# 显示访问信息
+show_access_info() {
+    log_info "========== 部署完成 =========="
+    echo ""
+    echo "✅ 青龙面板部署完成！"
+    echo ""
+    echo "📊 访问信息："
+    echo "   - 面板地址：http://localhost:5700"
+    echo "   - 默认账号：admin"
+    echo "   - 默认密码：admin（首次登录需修改）"
+    echo ""
+    echo "📁 重要目录："
+    echo "   - 青龙主目录：/usr/lib/node_modules/@whyour/qinglong"
+    echo "   - 数据目录：/ql/data"
+    echo "   - 配置文件：/ql/data/config/config.sh"
+    echo ""
+    echo "🛠️ 管理命令："
+    echo "   - 启动青龙：pm2 start qinglong"
+    echo "   - 停止青龙：pm2 stop qinglong"
+    echo "   - 重启青龙：pm2 restart qinglong"
+    echo "   - 查看日志：pm2 logs qinglong"
+    echo ""
+    echo "⚠️  注意：首次访问需按提示完成初始化设置"
+    echo ""
 }
 
-# ==========================
-# 主流程
-# ==========================
-clear
-echo -e "${GREEN}==================================================${NC}"
-echo -e "${GREEN}      青龙面板 WSL1 专用部署脚本（日志还原版）      ${NC}"
-echo -e "${GREEN}           适配Ubuntu20.04 | Node20.x           ${NC}"
-echo -e "${GREEN}==================================================${NC}"
+# 主函数
+main() {
+    clear
+    echo "=================================================="
+    echo "      青龙面板 WSL1 专用部署脚本（日志还原版）"
+    echo "           适配Ubuntu20.04 | Node20.x"
+    echo "=================================================="
+    echo ""
+    
+    # 执行步骤
+    check_root
+    check_environment
+    clean_old
+    install_dependencies
+    install_nodejs
+    setup_mirrors
+    install_qinglong
+    init_qinglong_dirs
+    start_services
+    show_access_info
+    
+    log_info "脚本执行完毕！"
+}
 
-env_check
-clean_old_env
-install_deps
-install_node
-set_mirrors
-install_build_tools
-install_qinglong
-start_qinglong
-set_autostart
-show_info
+# 执行主函数
+main "$@"

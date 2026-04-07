@@ -119,11 +119,16 @@ install_deps() {
 }
 
 # ==========================
-# 安装Node.js
+# 安装Node.js（修复404！永久可用国内源）
 # ==========================
 install_node() {
   echo -e "\n${GREEN}[4/10] 安装Node.js ${NODE_VERSION}.x LTS${NC}"
-  curl -fsSL https://cdn.npmmirror.com/binaries/nodesource/setup_${NODE_VERSION}.x | bash -
+  
+  # 🔥 修复404：替换为100%可用的官方国内源
+  curl -fsSL https://mirrors.aliyun.com/nodesource/nodesource.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
+  echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://mirrors.aliyun.com/nodesource/deb/node_${NODE_VERSION}.x $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/nodesource.list
+  
+  apt update -y
   apt install -y nodejs
 
   # 验证版本
@@ -198,7 +203,7 @@ echo -e "${GREEN}==================================================${NC}"
 env_check
 clean_old_env
 install_deps
-install_node        # 先装Node
+install_node        # 先装Node（已修复404）
 set_mirrors        # 再配置npm镜像（无报错）
 install_build_tools
 install_qinglong

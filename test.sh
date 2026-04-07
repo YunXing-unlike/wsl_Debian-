@@ -8,16 +8,17 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# ========== 全局变量（固定适配WSL1） ==========
+# ========== 全局变量 ==========
 QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
 QL_DATA_DIR="/ql/data"
 QL_PORT=5700
 NODE_VERSION=20
-GITHUB_MIRROR="https://gh.xx9527.cn"
+SPEED_TEST_URL="https://nodesource.com"
+GITHUB_API_URL="https://xiake.pro/static/node.json"  # 恢复原脚本的测速接口
 NPM_MIRROR="https://registry.npmmirror.com"
 
 # ==========================
-# 工具函数：环境预检
+# 工具函数：系统环境检测
 # ==========================
 env_check() {
   echo -e "${GREEN}[环境预检] 正在检测系统信息...${NC}"
@@ -28,7 +29,7 @@ env_check() {
   echo -e "${BLUE}  OS:        $PRETTY_NAME${NC}"
   echo -e "${BLUE}  Arch:      $ARCH${NC}"
 
-  # WSL1强制校验（禁止WSL2）
+  # WSL1强制校验
   if uname -r | grep -qiw "wsl2"; then
     echo -e "${RED}❌ 错误：当前为WSL2，脚本仅支持WSL1！请切换WSL1后重试${NC}"
     exit 1
@@ -36,12 +37,55 @@ env_check() {
   echo -e "${GREEN}✅ WSL1 环境校验通过${NC}"
 
   # 网络检测
-  if curl -s --connect-timeout 3 https://www.baidu.com >/dev/null; then
-    echo -e "${BLUE}  网络:      直连正常${NC}"
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 $SPEED_TEST_URL || true)
+  if [ "$HTTP_CODE" = "200" ]; then
+    NET_STATUS="直连正常"
+    NEED_MIRROR=0
   else
-    echo -e "${RED}❌ 错误：网络异常，请检查网络后重试${NC}"
-    exit 1
+    NET_STATUS="国外源访问异常，将自动全速加速"
+    NEED_MIRROR=1
   fi
+  echo -e "${BLUE}  网络:      $NET_STATUS${NC}"
+}
+
+# ==========================
+# 自动获取最快GitHub镜像（恢复原脚本功能）
+# ==========================
+get_fastest_gh_mirror() {
+  set +e
+  set +o pipefail
+
+  echo -e "\n${GREEN}[Git加速] 正在获取最优GitHub镜像...${NC}"
+
+  # 调用xiake.pro测速接口获取镜像列表
+  JSON_RESP=$(curl -s --connect-timeout 10 --max-time 15 "$GITHUB_API_URL" 2>/dev/null)
+  
+  # 解析JSON，选择speed最快的镜像
+  BEST_MIRROR=$(echo "$JSON_RESP" | jq -r '.data | map(select(.speed > 0)) | sort_by(.speed) | reverse | .[0].url' 2>/dev/null)
+
+  # 兜底机制
+  if [ -z "$BEST_MIRROR" ] || [ "$BEST_MIRROR" = "null" ]; then
+    BEST_MIRROR="https://fastgit.cc"
+    echo -e "${YELLOW}⚠️ 镜像接口自动选择失败，使用稳定备用镜像：$BEST_MIRROR${NC}"
+  else
+    echo -e "${GREEN}✅ 已自动选择最快镜像：$BEST_MIRROR${NC}"
+  fi
+
+  set -o pipefail
+  set -e
+}
+
+# ==========================
+# 应用Git全局加速（恢复原脚本功能）
+# ==========================
+git_mirror_smart() {
+  get_fastest_gh_mirror
+  
+  echo -e "${GREEN}[Git加速] 应用全局代理加速${NC}"
+  git config --global url."${BEST_MIRROR}/".insteadOf "https://github.com/"
+  git config --global url."${BEST_MIRROR}/".insteadOf "https://raw.githubusercontent.com/"
+  git config --global http.sslVerify false
+  git config --global core.compression 9
 }
 
 # ==========================
@@ -58,10 +102,8 @@ index-url = https://mirrors.aliyun.com/pypi/simple/
 trusted-host = mirrors.aliyun.com
 EOF
 
-  # Git全局镜像（解决GitHub下载失败）
-  git config --global url."${GITHUB_MIRROR}/".insteadOf "https://github.com/"
-  git config --global url."${GITHUB_MIRROR}/".insteadOf "https://raw.githubusercontent.com/"
-  git config --global http.sslVerify false
+  # Git镜像（自动测速选择最快）
+  git_mirror_smart
 
   # NPM镜像
   npm config set registry ${NPM_MIRROR}
@@ -69,7 +111,7 @@ EOF
 }
 
 # ==========================
-# 清理旧环境/缓存/进程
+# 清理旧环境
 # ==========================
 clean_old_env() {
   echo -e "\n${GREEN}[清理] 彻底清空旧环境/缓存/进程${NC}"
@@ -93,7 +135,7 @@ clean_old_env() {
 }
 
 # ==========================
-# 安装系统必备依赖
+# 安装系统依赖
 # ==========================
 install_deps() {
   echo -e "\n${GREEN}[3/10] 更新系统&安装编译依赖${NC}"
@@ -101,10 +143,8 @@ install_deps() {
   sudo apt upgrade -y
   sudo apt install -y \
     git curl wget make build-essential libssl-dev libsqlite3-dev \
-    python3 python3-pip python-is-python3 iproute2 jq lsof nginx \
+    python3 python3-pip python-is-python3 iproute2 jq lsof \
     ccache gcc g++ --no-install-recommends
-
-  # 清理无用依赖
   sudo apt autoremove -y
 }
 
@@ -123,7 +163,7 @@ install_node() {
 }
 
 # ==========================
-# 安装青龙编译必备工具（修复核心报错）
+# 安装编译工具（修复核心报错）
 # ==========================
 install_build_tools() {
   echo -e "\n${GREEN}[5/10] 安装编译工具（修复node-gyp报错）${NC}"
@@ -137,7 +177,7 @@ install_qinglong() {
   echo -e "\n${GREEN}[6/10] 全局安装青龙面板${NC}"
   npm install -g --unsafe-perm @whyour/qinglong
 
-  # 自动配置环境变量（无需手动export）
+  # 自动配置环境变量
   echo "export QL_DIR=${QL_DIR}" | sudo tee -a /etc/profile >/dev/null
   echo "export QL_DATA_DIR=${QL_DATA_DIR}" | sudo tee -a /etc/profile >/dev/null
   source /etc/profile
@@ -145,15 +185,11 @@ install_qinglong() {
 }
 
 # ==========================
-# 启动青龙（官方标准方式）
+# 启动青龙
 # ==========================
 start_qinglong() {
   echo -e "\n${GREEN}[7/10] 启动青龙面板${NC}"
   
-  # 关闭WSL1冲突服务
-  sudo systemctl stop nginx 2>/dev/null || true
-  sudo systemctl disable nginx 2>/dev/null || true
-
   # 后台启动
   qinglong &
   sleep 10
@@ -177,7 +213,6 @@ show_info() {
   echo -e "${GREEN}✅ 账号密码：${YELLOW}cat ${QL_DATA_DIR}/config/auth.json${NC}"
   echo -e "${GREEN}✅ 重启命令：${YELLOW}qinglong restart${NC}"
   echo -e "${GREEN}==================================================${NC}"
-  echo -e "${YELLOW}💡 提示：首次打开面板会自动初始化，等待10秒即可${NC}"
 }
 
 # ==========================
@@ -185,8 +220,8 @@ show_info() {
 # ==========================
 clear
 echo -e "${GREEN}==================================================${NC}"
-echo -e "${GREEN}      青龙面板 WSL1 专用部署脚本（优化无错版）      ${NC}"
-echo -e "${GREEN}           自动修复编译报错 · 一键部署完成           ${NC}"
+echo -e "${GREEN}      青龙面板 WSL1 专用部署脚本（智能加速版）      ${NC}"
+echo -e "${GREEN}           自动测速·自动选最快GitHub镜像           ${NC}"
 echo -e "${GREEN}==================================================${NC}"
 
 # 执行部署

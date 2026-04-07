@@ -114,7 +114,7 @@ get_fastest_gh_mirror() {
 
   # 兜底备用镜像
   if [ -z "$BEST_MIRROR" ] || [ "$BEST_MIRROR" = "null" ]; then
-    BEST_MIRROR="https://mirror.ghproxy.com"
+    BEST_MIRROR="https://fastgit.cc"
     echo -e "${YELLOW}镜像接口请求失败，使用备用镜像：$BEST_MIRROR${NC}"
   else
     echo -e "${GREEN}已自动选择最快镜像：$BEST_MIRROR${NC}"

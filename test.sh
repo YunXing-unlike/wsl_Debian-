@@ -12,7 +12,7 @@ NC='\033[0m'
 QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
 QL_DATA_DIR="/ql/data"
 NODE_VERSION=20
-GIT_MIRROR="https://fastgit.cc"
+GIT_MIRROR="https://gh.llkk.cc"
 NPM_MIRROR="https://registry.npmmirror.com"
 
 # ==========================
@@ -76,7 +76,7 @@ install_node() {
 }
 
 # ==========================
-# 配置国内镜像（日志原版）
+# 配置国内镜像（日志原版：强制HTTPS，禁用SSH拉取）
 # ==========================
 set_mirrors() {
   echo -e "\n${GREEN}[3/8] 配置国内镜像（Git/NPM/PIP）${NC}"
@@ -87,8 +87,10 @@ set_mirrors() {
 index-url = https://mirrors.aliyun.com/pypi/simple/
 trusted-host = mirrors.aliyun.com
 EOF
-  # Git加速镜像（日志原版）
+  # 日志关键：全局Git加速+禁用SSH，强制走HTTPS镜像
   git config --global url."${GIT_MIRROR}/".insteadOf "https://github.com/"
+  git config --global url."${GIT_MIRROR}/".insteadOf "ssh://git@github.com/"
+  git config --global url."${GIT_MIRROR}/".insteadOf "git@github.com:"
   # NPM镜像
   npm config set registry ${NPM_MIRROR}
   echo -e "${GREEN}✅ 镜像配置完成${NC}"
@@ -105,14 +107,14 @@ install_build_tools() {
 }
 
 # ==========================
-# 安装青龙面板（日志原版操作）
+# 安装青龙面板（日志原版成功命令）
 # ==========================
 install_qinglong() {
   echo -e "\n${GREEN}[5/8] 清理NPM缓存并安装青龙面板${NC}"
   # 日志关键操作：清理缓存
   npm cache clean --force
-  # 日志原版安装命令，无多余参数
-  npm install -g @whyour/qinglong
+  # 日志核心修复：必加 --unsafe-perm，首次成功就是用的这个命令
+  npm install -g --unsafe-perm @whyour/qinglong
 
   # 配置环境变量（日志原版）
   echo "export QL_DIR=${QL_DIR}" | tee -a /etc/profile >/dev/null

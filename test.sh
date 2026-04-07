@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==================================================
-# 青龙面板 WSL1 专用部署脚本（日志还原版）
+# 青龙面板 WSL1 专用部署脚本（日志还原版，使用 pnpm 安装）
 # 适配 Ubuntu 20.04 | Node.js 20.x
 # 适用于无 Docker 环境的 WSL1 或纯 Linux 系统
 # 作者：根据日志还原
@@ -70,6 +70,9 @@ clean_old() {
     # 清理 npm 全局包
     npm uninstall -g @whyour/qinglong 2>/dev/null || true
     
+    # 清理 pnpm 全局包（如果存在）
+    pnpm uninstall -g @whyour/qinglong 2>/dev/null || true
+    
     # 清理数据目录（谨慎操作）
     # rm -rf /ql/data  # 如需全新安装可取消注释
     
@@ -105,6 +108,21 @@ install_nodejs() {
     log_info "Node版本：$node_version | NPM版本：$npm_version"
 }
 
+# 安装 pnpm（如果未安装）
+install_pnpm() {
+    log_info "========== 安装 pnpm =========="
+    
+    if ! command -v pnpm &> /dev/null; then
+        log_info "检测到未安装 pnpm，正在通过官方脚本安装..."
+        curl -fsSL https://get.pnpm.io/install.sh | sh -
+        # 重新加载环境变量
+        source ~/.bashrc
+        log_info "pnpm 安装完成，当前版本：$(pnpm --version)"
+    else
+        log_info "pnpm 已安装，当前版本：$(pnpm --version)"
+    fi
+}
+
 # 配置国内镜像
 setup_mirrors() {
     log_info "========== 配置国内镜像（Git/NPM/PIP） =========="
@@ -112,18 +130,27 @@ setup_mirrors() {
     # 配置 npm 镜像
     npm config set registry https://registry.npmmirror.com
     
+    # 配置 pnpm 镜像
+    pnpm config set registry https://registry.npmmirror.com
+    
     # 配置 git（可选）
     git config --global url."https://ghproxy.com/https://github.com".insteadOf "https://github.com" 2>/dev/null || true
     
     log_info "镜像配置完成"
 }
 
-# 安装青龙面板
+# 安装青龙面板（使用 pnpm）
 install_qinglong() {
     log_info "========== 安装青龙面板 =========="
     
-    # 全局安装青龙
-    npm install -g @whyour/qinglong
+    # 安装 pnpm（如果未安装）
+    install_pnpm
+    
+    # 设置 pnpm 并行线程数（提高安装速度）
+    pnpm config set concurrency 10  # 可根据需要调整线程数（例如 10）
+    
+    # 使用 pnpm 安装青龙面板
+    pnpm install -g @whyour/qinglong
     
     # 设置环境变量
     export QL_DIR="/usr/lib/node_modules/@whyour/qinglong"

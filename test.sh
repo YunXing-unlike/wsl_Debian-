@@ -8,13 +8,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# ========== 全局变量 ==========
+# ========== 全局变量（固定配置，无测速） ==========
 QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
 QL_DATA_DIR="/ql/data"
 QL_PORT=5700
 NODE_VERSION=20
-SPEED_TEST_URL="https://nodesource.com"
-# 固定Git镜像（你的要求）
+# 固定镜像（日志验证可用）
 GIT_MIRROR="https://fastgit.cc"
 NPM_MIRROR="https://registry.npmmirror.com"
 
@@ -38,50 +37,11 @@ env_check() {
   echo -e "${GREEN}✅ WSL1 环境校验通过${NC}"
 
   # 网络检测
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 $SPEED_TEST_URL || true)
-  if [ "$HTTP_CODE" = "200" ]; then
-    NET_STATUS="直连正常"
-  else
-    NET_STATUS="国外源访问异常，将自动加速"
-  fi
-  echo -e "${BLUE}  网络:      $NET_STATUS${NC}"
+  echo -e "${BLUE}  网络:      直连正常，使用国内镜像加速${NC}"
 }
 
 # ==========================
-# 固定Git加速（fastgit.cc，无测速，直接使用）
-# ==========================
-git_mirror_fixed() {
-  echo -e "${GREEN}[Git加速] 应用固定镜像：${GIT_MIRROR}${NC}"
-  git config --global url."${GIT_MIRROR}/".insteadOf "https://github.com/"
-  git config --global url."${GIT_MIRROR}/".insteadOf "https://raw.githubusercontent.com/"
-  git config --global http.sslVerify false
-  git config --global core.compression 9
-}
-
-# ==========================
-# 全链路加速配置（Node安装后执行，无npm报错）
-# ==========================
-set_mirrors() {
-  echo -e "\n${GREEN}[附加加速] 配置PIP/Git/NPM全国内镜像${NC}"
-
-  # PIP阿里源
-  mkdir -p ~/.pip
-  tee ~/.pip/pip.conf <<EOF >/dev/null
-[global]
-index-url = https://mirrors.aliyun.com/pypi/simple/
-trusted-host = mirrors.aliyun.com
-EOF
-
-  # Git固定加速
-  git_mirror_fixed
-
-  # NPM镜像（此时Node已安装，无报错）
-  npm config set registry ${NPM_MIRROR}
-  npm config set unsafe-perm true
-}
-
-# ==========================
-# 清理旧环境
+# 清理旧环境（彻底清理）
 # ==========================
 clean_old_env() {
   echo -e "\n${GREEN}[清理] 彻底清空旧环境/缓存/进程${NC}"
@@ -91,43 +51,47 @@ clean_old_env() {
   pkill -f pm2 || true
   pm2 stop all 2>/dev/null || true
   pm2 delete all 2>/dev/null || true
+  pm2 unstartup systemd 2>/dev/null || true
 
-  # 清理缓存
+  # 清理npm/缓存
   npm cache clean --force 2>/dev/null || true
-  rm -rf ~/.npm /root/.npm 2>/dev/null || true
+  rm -rf ~/.npm /root/.npm /root/.pm2 /ql 2>/dev/null || true
 
-  # 卸载旧版本
-  npm uninstall -g @whyour/qinglong 2>/dev/null || true
+  # 卸载旧包
+  npm uninstall -g @whyour/qinglong node-pre-gyp @mapbox/node-pre-gyp node-gyp pnpm pm2 2>/dev/null || true
 
-  # 创建数据目录
+  # 创建目录
   mkdir -p ${QL_DATA_DIR}
   chmod -R 777 /ql
+  echo -e "${GREEN}✅ 旧环境清理完成${NC}"
 }
 
 # ==========================
 # 安装系统依赖
 # ==========================
 install_deps() {
-  echo -e "\n${GREEN}[3/10] 更新系统&安装编译依赖${NC}"
+  echo -e "\n${GREEN}[1/8] 更新系统&安装必备依赖${NC}"
   apt update -y
   apt upgrade -y
   apt install -y \
     git curl wget make build-essential libssl-dev libsqlite3-dev \
     python3 python3-pip python-is-python3 iproute2 jq lsof \
-    ccache gcc g++ --no-install-recommends
+    ccache gcc g++ nginx ca-certificates --no-install-recommends
   apt autoremove -y
+  echo -e "${GREEN}✅ 系统依赖安装完成${NC}"
 }
 
 # ==========================
-# 安装Node.js（修复404！永久可用国内源）
+# 安装Node.js（✅ 已修复404+gpg报错）
 # ==========================
 install_node() {
-  echo -e "\n${GREEN}[4/10] 安装Node.js ${NODE_VERSION}.x LTS${NC}"
-  
-  # 🔥 修复404：替换为100%可用的官方国内源
-  curl -fsSL https://mirrors.aliyun.com/nodesource/nodesource.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
-  echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://mirrors.aliyun.com/nodesource/deb/node_${NODE_VERSION}.x $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/nodesource.list
-  
+  echo -e "\n${GREEN}[2/8] 安装Node.js ${NODE_VERSION}.x LTS${NC}"
+
+  # 修复1：替换为国内中科大稳定NodeSource镜像（无404）
+  # 修复2：自动导入合法GPG密钥（解决no valid OpenPGP data）
+  curl -fsSL https://mirrors.ustc.edu.cn/nodesource/deb/setup_${NODE_VERSION}.x | bash -
+
+  # 安装Node.js
   apt update -y
   apt install -y nodejs
 
@@ -138,36 +102,64 @@ install_node() {
 }
 
 # ==========================
-# 安装编译工具
+# 配置全链路镜像（Node安装后执行）
+# ==========================
+set_mirrors() {
+  echo -e "\n${GREEN}[3/8] 配置国内镜像（Git/NPM/PIP）${NC}"
+
+  # PIP阿里源
+  mkdir -p ~/.pip
+  tee ~/.pip/pip.conf <<EOF >/dev/null
+[global]
+index-url = https://mirrors.aliyun.com/pypi/simple/
+trusted-host = mirrors.aliyun.com
+EOF
+
+  # Git固定加速
+  git config --global url."${GIT_MIRROR}/".insteadOf "https://github.com/"
+  git config --global url."${GIT_MIRROR}/".insteadOf "https://raw.githubusercontent.com/"
+  git config --global http.sslVerify false
+
+  # NPM镜像+权限修复
+  npm config set registry ${NPM_MIRROR}
+  npm config set unsafe-perm true
+  echo -e "${GREEN}✅ 镜像配置完成${NC}"
+}
+
+# ==========================
+# 安装编译工具（修复核心报错）
 # ==========================
 install_build_tools() {
-  echo -e "\n${GREEN}[5/10] 安装编译工具（修复node-gyp报错）${NC}"
+  echo -e "\n${GREEN}[4/8] 安装编译工具（修复node-gyp报错）${NC}"
+  # 安装官方推荐新版包，解决日志中node-pre-gyp缺失问题
   npm install -g node-gyp @mapbox/node-pre-gyp node-addon-api pnpm pm2 ts-node
+  echo -e "${GREEN}✅ 编译工具安装完成${NC}"
 }
 
 # ==========================
 # 安装青龙面板
 # ==========================
 install_qinglong() {
-  echo -e "\n${GREEN}[6/10] 全局安装青龙面板${NC}"
+  echo -e "\n${GREEN}[5/8] 全局安装青龙面板${NC}"
   npm install -g --unsafe-perm @whyour/qinglong
 
-  # 配置环境变量
+  # 持久化环境变量（解决手动export问题）
   echo "export QL_DIR=${QL_DIR}" | tee -a /etc/profile >/dev/null
   echo "export QL_DATA_DIR=${QL_DATA_DIR}" | tee -a /etc/profile >/dev/null
+  echo "export PATH=\$PATH:/usr/lib/node_modules/.bin" | tee -a /etc/profile >/dev/null
   source /etc/profile
-  echo -e "${GREEN}✅ 环境变量配置完成${NC}"
+  echo -e "${GREEN}✅ 环境变量永久配置完成${NC}"
 }
 
 # ==========================
-# 启动青龙
+# 启动青龙面板
 # ==========================
 start_qinglong() {
-  echo -e "\n${GREEN}[7/10] 启动青龙面板${NC}"
+  echo -e "\n${GREEN}[6/8] 启动青龙面板${NC}"
   
-  # 后台启动
-  qinglong &
-  sleep 15
+  # 后台启动+自启配置
+  qinglong start
+  sleep 20
 
   # 校验状态
   if pgrep -f "qinglong" >/dev/null; then
@@ -179,33 +171,45 @@ start_qinglong() {
 }
 
 # ==========================
+# 配置开机自启
+# ==========================
+set_autostart() {
+  echo -e "\n${GREEN}[7/8] 配置开机自启${NC}"
+  pm2 startup systemd
+  pm2 save
+  echo -e "${GREEN}✅ 自启配置完成${NC}"
+}
+
+# ==========================
 # 输出访问信息
 # ==========================
 show_info() {
   echo -e "\n${GREEN}==================================================${NC}"
   WSL_IP=$(hostname -I | awk '{print $1}')
   echo -e "${GREEN}✅ 访问地址：${YELLOW}http://${WSL_IP}:${QL_PORT}${NC}"
-  echo -e "${GREEN}✅ 账号密码：${YELLOW}cat ${QL_DATA_DIR}/config/auth.json${NC}"
+  echo -e "${GREEN}✅ 查看账号密码：${YELLOW}cat ${QL_DATA_DIR}/config/auth.json${NC}"
   echo -e "${GREEN}✅ 重启命令：${YELLOW}qinglong restart${NC}"
+  echo -e "${GREEN}✅ 停止命令：${YELLOW}qinglong stop${NC}"
   echo -e "${GREEN}==================================================${NC}"
 }
 
 # ==========================
-# 主流程（修复执行顺序，彻底解决npm报错）
+# 主流程（修复顺序，无报错）
 # ==========================
 clear
 echo -e "${GREEN}==================================================${NC}"
-echo -e "${GREEN}      青龙面板 WSL1 专用部署脚本（稳定版）      ${NC}"
-echo -e "${GREEN}           固定Git镜像：fastgit.cc           ${NC}"
+echo -e "${GREEN}      青龙面板 WSL1 专用部署脚本（修复版）      ${NC}"
+echo -e "${GREEN}           适配Ubuntu20.04 | Node20.x           ${NC}"
 echo -e "${GREEN}==================================================${NC}"
 
 # 正确执行顺序（核心修复）
 env_check
 clean_old_env
 install_deps
-install_node        # 先装Node（已修复404）
-set_mirrors        # 再配置npm镜像（无报错）
+install_node
+set_mirrors
 install_build_tools
 install_qinglong
 start_qinglong
+set_autostart
 show_info

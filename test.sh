@@ -1,10 +1,9 @@
 #!/bin/bash
 # ==================================================
 # 青龙面板 WSL1 专用部署脚本（日志还原版，使用 pnpm 安装）
-# 适配 Ubuntu 20.04 | Node.js 20.x
-# 适用于无 Docker 环境的 WSL1 或纯 Linux 系统
+# 适配 Ubuntu 20.04 | Node.js 20.x | pnpm
 # 作者：根据日志还原
-# 版本：v1.0
+# 版本：v1.1
 # ==================================================
 
 set -e  # 遇到错误立即退出
@@ -70,7 +69,7 @@ clean_old() {
     # 清理 npm 全局包
     npm uninstall -g @whyour/qinglong 2>/dev/null || true
     
-    # 清理 pnpm 全局包（如果存在）
+    # 清理 pnpm 全局包
     pnpm uninstall -g @whyour/qinglong 2>/dev/null || true
     
     # 清理数据目录（谨慎操作）
@@ -113,44 +112,37 @@ install_pnpm() {
     log_info "========== 安装 pnpm =========="
     
     if ! command -v pnpm &> /dev/null; then
-        log_info "检测到未安装 pnpm，正在通过官方脚本安装..."
+        log_info "检测到 pnpm 未安装，开始安装..."
+        # 使用 curl 安装 pnpm
         curl -fsSL https://get.pnpm.io/install.sh | sh -
-        # 重新加载环境变量
+        # 添加 pnpm 到环境变量
+        export PATH="$PATH:$HOME/.pnpm"
         source ~/.bashrc
-        log_info "pnpm 安装完成，当前版本：$(pnpm --version)"
+        log_info "pnpm 安装完成"
     else
-        log_info "pnpm 已安装，当前版本：$(pnpm --version)"
+        log_info "pnpm 已安装"
     fi
 }
 
-# 配置国内镜像
-setup_mirrors() {
-    log_info "========== 配置国内镜像（Git/NPM/PIP） =========="
+# 配置 pnpm 镜像源
+setup_pnpm_mirrors() {
+    log_info "========== 配置 pnpm 国内镜像源 =========="
     
-    # 配置 npm 镜像
-    npm config set registry https://registry.npmmirror.com
-    
-    # 配置 pnpm 镜像
+    # 设置 pnpm 镜像源
     pnpm config set registry https://registry.npmmirror.com
-    
-    # 配置 git（可选）
-    git config --global url."https://ghproxy.com/https://github.com".insteadOf "https://github.com" 2>/dev/null || true
-    
-    log_info "镜像配置完成"
+    pnpm config set network-timeout 300000
+    pnpm config set strict-ssl false
+    pnpm config set parallel 4  # 设置并行线程数为 4，可根据 CPU 核心数调整
+
+    log_info "pnpm 镜像配置完成"
 }
 
-# 安装青龙面板（使用 pnpm）
+# 安装青龙面板（通过 pnpm）
 install_qinglong() {
     log_info "========== 安装青龙面板 =========="
     
-    # 安装 pnpm（如果未安装）
-    install_pnpm
-    
-    # 设置 pnpm 并行线程数（提高安装速度）
-    pnpm config set concurrency 10  # 可根据需要调整线程数（例如 10）
-    
-    # 使用 pnpm 安装青龙面板
-    pnpm install -g @whyour/qinglong
+    # 安装青龙面板
+    pnpm install -g @whyour/qinglong --no-fund --no-progress --parallel 4
     
     # 设置环境变量
     export QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
@@ -212,7 +204,7 @@ start_services() {
     
     # 安装 PM2（如果未安装）
     if ! command -v pm2 &> /dev/null; then
-        npm install -g pm2
+        pnpm install -g pm2
     fi
     
     # 启动青龙
@@ -256,7 +248,7 @@ main() {
     clear
     echo "=================================================="
     echo "      青龙面板 WSL1 专用部署脚本（日志还原版）"
-    echo "           适配Ubuntu20.04 | Node20.x"
+    echo "           适配Ubuntu20.04 | Node20.x | pnpm"
     echo "=================================================="
     echo ""
     
@@ -266,7 +258,8 @@ main() {
     clean_old
     install_dependencies
     install_nodejs
-    setup_mirrors
+    install_pnpm
+    setup_pnpm_mirrors
     install_qinglong
     init_qinglong_dirs
     start_services

@@ -53,26 +53,26 @@ sudo apt-get update
 # 说明：脱离Docker必须手动解决 git, curl, wget, gcc, make 等编译依赖
 sudo apt-get install -y git curl wget unzip tar gcc g++ make python3 python3-pip
 
-# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Git克隆修正版] ---
+# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Git克隆最终修正版] ---
 echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用淘宝镜像加速)...${NC}"
 
 export NVM_DIR="$HOME/.nvm"
 
-# [修补方案] 使用 Git 克隆代替 Wget 下载，稳定性更高
+# [最终修正] 放弃 wget，改用 git clone，解决文件丢失问题
+# 检查目录是否存在且包含 .git 目录，确保是完整的仓库
 if [ ! -d "$NVM_DIR/.git" ]; then
-    echo "正在通过 Git 克隆 NVM 仓库 (使用加速源)..."
-    # 备注信息：直接下载 install.sh 脚本容易受网络波动影响导致文件丢失
-    # 改用 git clone 获取完整的 nvm 仓库，更稳定
+    echo "正在通过 Git 克隆 NVM 仓库 (使用加速源 ${GH_PROXY})..."
+    # 备注信息：Git 方式比 wget 更稳定，且支持断点续传
     # 使用 gh.llkk.cc 加速 GitHub (要求6)
     git clone ${GH_PROXY}github.com/nvm-sh/nvm.git "$NVM_DIR"
     
+    # 检查克隆是否成功
     if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Git 克隆失败。请检查网络或尝试切换热点。${NC}"
+        echo -e "${RED}错误: Git 克隆失败。请检查网络连接或尝试切换网络环境。${NC}"
         exit 1
     fi
 else
-    echo "NVM 目录已存在，尝试更新..."
-    cd "$NVM_DIR" && git pull
+    echo "NVM 仓库已存在，跳过下载。"
 fi
 
 # [核心修补] 强制加载 nvm 环境
@@ -81,7 +81,7 @@ if [ -s "$NVM_DIR/nvm.sh" ]; then
     echo "正在加载 NVM 环境..."
     . "$NVM_DIR/nvm.sh"  # 这里的 . 等同于 source 命令
 else
-    echo -e "${RED}致命错误: nvm.sh 文件未找到，下载可能不完整。${NC}"
+    echo -e "${RED}致命错误: nvm.sh 文件未找到，Git 克隆可能不完整。${NC}"
     exit 1
 fi
 
@@ -106,6 +106,7 @@ npm config set registry https://registry.npmmirror.com
 npm install -g pnpm
 # 配置 pnpm 淘宝镜像源
 pnpm config set registry https://registry.npmmirror.com
+
 # --- 步骤 4: 安装 PM2 进程守护 ---
 echo -e "${GREEN}>>> [4/6] 安装 PM2 进程管理工具...${NC}"
 # 备注信息：脱离 Docker 容器化后，必须使用 PM2 来守护 Node 进程，保证面板开机自启和崩溃重启

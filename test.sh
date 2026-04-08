@@ -53,25 +53,38 @@ sudo apt-get update
 # 说明：脱离Docker必须手动解决 git, curl, wget, gcc, make 等编译依赖
 sudo apt-get install -y git curl wget unzip tar gcc g++ make python3 python3-pip
 
-# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) ---
+# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [修正版] ---
 echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用淘宝镜像加速)...${NC}"
-# 安装 nvm (Node Version Manager)
-# 备注信息：使用 nvm 可以灵活切换 Node 版本，解决青龙面板对 Node 版本的依赖
+
+# 定义 NVM 安装目录
 export NVM_DIR="$HOME/.nvm"
+
+# [修补逻辑] 检查是否已安装，未安装则执行下载
 if [ ! -d "$NVM_DIR" ]; then
     echo "正在下载 nvm..."
-    # 使用加速源下载 nvm 安装脚本
+    # 使用加速源下载 nvm 安装脚本 (要求6)
+    # 注意：这里必须使用 -qO- 保证脚本内容完整传递给 bash
     wget -qO- ${GH_PROXY}raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    
+    # 备注信息：安装完成后，必须手动 source 一下，否则当前脚本不识别 nvm 命令
+    # 这一步是解决 "command not found" 的关键
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
+        . "$NVM_DIR/nvm.sh"  # 加载 nvm
+        echo "NVM 初始化加载成功。"
+    else
+        echo -e "${RED}错误: NVM 安装文件丢失，请检查网络连接。${NC}"
+        exit 1
+    fi
+else
+    # 如果已安装，直接加载环境
+    echo "NVM 已存在，正在加载环境..."
+    . "$NVM_DIR/nvm.sh"
 fi
-
-# 加载 nvm 环境
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
 # 设置 nvm 国内镜像源 (极大加速 Node 下载)
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
-# 安装 Node.js (青龙面板推荐 LTS 版本，如 v18 或 v20)
+# 安装 Node.js (青龙面板推荐 v18)
 echo "正在安装 Node.js v18..."
 nvm install 18
 nvm use 18

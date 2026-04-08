@@ -53,35 +53,40 @@ sudo apt-get update
 # 说明：脱离Docker必须手动解决 git, curl, wget, gcc, make 等编译依赖
 sudo apt-get install -y git curl wget unzip tar gcc g++ make python3 python3-pip
 
-# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [修正版] ---
+# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Git克隆修正版] ---
 echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用淘宝镜像加速)...${NC}"
 
-# 定义 NVM 安装目录
 export NVM_DIR="$HOME/.nvm"
 
-# [修补逻辑] 检查是否已安装，未安装则执行下载
-if [ ! -d "$NVM_DIR" ]; then
-    echo "正在下载 nvm..."
-    # 使用加速源下载 nvm 安装脚本 (要求6)
-    # 注意：这里必须使用 -qO- 保证脚本内容完整传递给 bash
-    wget -qO- ${GH_PROXY}raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+# [修补方案] 使用 Git 克隆代替 Wget 下载，稳定性更高
+if [ ! -d "$NVM_DIR/.git" ]; then
+    echo "正在通过 Git 克隆 NVM 仓库 (使用加速源)..."
+    # 备注信息：直接下载 install.sh 脚本容易受网络波动影响导致文件丢失
+    # 改用 git clone 获取完整的 nvm 仓库，更稳定
+    # 使用 gh.llkk.cc 加速 GitHub (要求6)
+    git clone ${GH_PROXY}github.com/nvm-sh/nvm.git "$NVM_DIR"
     
-    # 备注信息：安装完成后，必须手动 source 一下，否则当前脚本不识别 nvm 命令
-    # 这一步是解决 "command not found" 的关键
-    if [ -s "$NVM_DIR/nvm.sh" ]; then
-        . "$NVM_DIR/nvm.sh"  # 加载 nvm
-        echo "NVM 初始化加载成功。"
-    else
-        echo -e "${RED}错误: NVM 安装文件丢失，请检查网络连接。${NC}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}错误: Git 克隆失败。请检查网络或尝试切换热点。${NC}"
         exit 1
     fi
 else
-    # 如果已安装，直接加载环境
-    echo "NVM 已存在，正在加载环境..."
-    . "$NVM_DIR/nvm.sh"
+    echo "NVM 目录已存在，尝试更新..."
+    cd "$NVM_DIR" && git pull
+fi
+
+# [核心修补] 强制加载 nvm 环境
+# 备注信息：必须手动执行 source，否则当前 shell 会话无法识别 nvm 命令
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    echo "正在加载 NVM 环境..."
+    . "$NVM_DIR/nvm.sh"  # 这里的 . 等同于 source 命令
+else
+    echo -e "${RED}致命错误: nvm.sh 文件未找到，下载可能不完整。${NC}"
+    exit 1
 fi
 
 # 设置 nvm 国内镜像源 (极大加速 Node 下载)
+# 备注信息：根据搜索结果，配置镜像源可有效解决 npm 下载失败问题
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
 # 安装 Node.js (青龙面板推荐 v18)
@@ -101,7 +106,6 @@ npm config set registry https://registry.npmmirror.com
 npm install -g pnpm
 # 配置 pnpm 淘宝镜像源
 pnpm config set registry https://registry.npmmirror.com
-
 # --- 步骤 4: 安装 PM2 进程守护 ---
 echo -e "${GREEN}>>> [4/6] 安装 PM2 进程管理工具...${NC}"
 # 备注信息：脱离 Docker 容器化后，必须使用 PM2 来守护 Node 进程，保证面板开机自启和崩溃重启

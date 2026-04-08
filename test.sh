@@ -53,22 +53,20 @@ sudo apt-get update
 # 说明：脱离Docker必须手动解决 git, curl, wget, gcc, make 等编译依赖
 sudo apt-get install -y git curl wget unzip tar gcc g++ make python3 python3-pip
 
-# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Git克隆最终修正版] ---
-echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用淘宝镜像加速)...${NC}"
+# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Gitee镜像修正版] ---
+echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用 Gitee 国内镜像加速)...${NC}"
 
 export NVM_DIR="$HOME/.nvm"
 
-# [最终修正] 放弃 wget，改用 git clone，解决文件丢失问题
-# 检查目录是否存在且包含 .git 目录，确保是完整的仓库
+# [核心修补] 放弃失效的 gh.llkk.cc 代理，改用 Gitee 官方镜像源
+# 备注信息：Gitee 是国内稳定的代码托管平台，同步了 NVM 官方仓库，速度极快且稳定
 if [ ! -d "$NVM_DIR/.git" ]; then
-    echo "正在通过 Git 克隆 NVM 仓库 (使用加速源 ${GH_PROXY})..."
-    # 备注信息：Git 方式比 wget 更稳定，且支持断点续传
-    # 使用 gh.llkk.cc 加速 GitHub (要求6)
-    git clone ${GH_PROXY}github.com/nvm-sh/nvm.git "$NVM_DIR"
+    echo "正在通过 Gitee 克隆 NVM 仓库..."
+    # 使用 Gitee 镜像源，解决 403 和连接超时问题
+    git clone https://gitee.com/mirrors/nvm.git "$NVM_DIR"
     
-    # 检查克隆是否成功
     if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Git 克隆失败。请检查网络连接或尝试切换网络环境。${NC}"
+        echo -e "${RED}错误: Git 克隆失败。请检查网络连接。${NC}"
         exit 1
     fi
 else
@@ -86,7 +84,7 @@ else
 fi
 
 # 设置 nvm 国内镜像源 (极大加速 Node 下载)
-# 备注信息：根据搜索结果，配置镜像源可有效解决 npm 下载失败问题
+# 备注信息：配置淘宝镜像，加速 Node.js 二进制包下载
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
 # 安装 Node.js (青龙面板推荐 v18)

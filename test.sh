@@ -22,7 +22,7 @@ QL_DIR="/opt/ql"
 QL_BRANCH="master" # 青龙面板主分支
 
 # GitHub 加速代理 (根据要求6配置)
-GH_PROXY="https://gh.llkk.cc/"
+GH_PROXY="https://fastgit.cc/"
 
 echo -e "${GREEN}=== 环境检查与初始化 ===${NC}"
 # 确保在 WSL1 环境中

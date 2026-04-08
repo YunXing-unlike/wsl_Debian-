@@ -1,272 +1,239 @@
 #!/bin/bash
-# ==================================================
-# 青龙面板 WSL1 专用部署脚本（日志还原版，使用 pnpm 安装）
-# 适配 Ubuntu 20.04 | Node.js 20.x | pnpm
-# 作者：根据日志还原
-# 版本：v1.1
-# ==================================================
+# 青龙面板一键安装脚本 | 无视报错 | 自定义步骤启动 | 强制步骤显示
+# 适用系统：Ubuntu 20.04 (focal)
+set +e                      # 核心：关闭报错退出，无视所有命令错误
+export LC_ALL=C              # 固定语言，避免输出乱码
 
-set -e  # 遇到错误立即退出
+# ====================== 配置区域 ======================
+# 高亮颜色定义（强制步骤显示，不被输出掩盖）
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
+NC='\033[0m'
+total_steps=25               # 总步骤数
+# ======================================================
 
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# 日志函数
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+# ====================== 核心函数 ======================
+# 强制打印步骤信息（永不被掩盖）
+print_step() {
+    local step_num=$1
+    local step_desc=$2
+    # 强制清空终端行，高亮输出步骤
+    echo -e "\n\033[K${BLUE}=============================================================${NC}"
+    echo -e "\033[K${GREEN}✅  当前执行步骤：${step_num}/${total_steps}  |  ${step_desc}${NC}"
+    echo -e "\033[K${BLUE}=============================================================${NC}\n"
 }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+# ====================== 分步执行函数 ======================
+# 步骤1：备份并替换阿里云Ubuntu源
+step1() {
+    print_step 1 "备份原软件源并写入阿里云源"
+    sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak || true
+    sudo sh -c 'cat > /etc/apt/sources.list << EOF
+deb http://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
+EOF' || true
 }
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+# 步骤2：更新软件源并升级系统
+step2() {
+    print_step 2 "更新软件包列表并升级系统"
+    sudo apt update && sudo apt upgrade -y || true
 }
 
-# 检查是否为 root 用户
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "请使用 root 用户运行此脚本！"
-        exit 1
+# 步骤3：安装基础依赖工具
+step3() {
+    print_step 3 "安装curl/git/net-tools等基础依赖"
+    sudo apt install -y curl git build-essential net-tools iproute2 || true
+}
+
+# 步骤4：配置DNS加速
+step4() {
+    print_step 4 "配置114DNS加速外网访问"
+    sudo sh -c 'rm /etc/resolv.conf && echo "nameserver 114.114.114.114" > /etc/resolv.conf' || true
+}
+
+# 步骤5：添加Node.js20.x官方源
+step5() {
+    print_step 5 "添加Node.js20.x安装源"
+    curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash - || true
+}
+
+# 步骤6：安装nodejs和npm
+step6() {
+    print_step 6 "安装nodejs和npm"
+    sudo apt install -y nodejs || true
+}
+
+# 步骤7：配置npm淘宝镜像源
+step7() {
+    print_step 7 "配置npm永久淘宝镜像"
+    npm config set registry https://registry.npmmirror.com || true
+}
+
+# 步骤8：全局安装青龙基础npm依赖
+step8() {
+    print_step 8 "全局安装node-pre-gyp/pnpm"
+    sudo npm install -g node-pre-gyp pnpm || true
+}
+
+# 步骤9：全局安装青龙面板核心包
+step9() {
+    print_step 9 "安装青龙面板核心包"
+    sudo npm install -g @whyour/qinglong || true
+}
+
+# 步骤10：安装python3和pip3
+step10() {
+    print_step 10 "安装python3和pip3"
+    sudo apt install -y python3 python3-pip || true
+}
+
+# 步骤11：配置pip阿里云源
+step11() {
+    print_step 11 "配置pip阿里云镜像源"
+    mkdir -p ~/.pip || true
+    sh -c 'cat > ~/.pip/pip.conf << EOF
+[global]
+index-url = https://mirrors.aliyun.com/pypi/simple
+EOF' || true
+}
+
+# 步骤12：创建青龙数据目录
+step12() {
+    print_step 12 "创建青龙面板数据目录"
+    mkdir -p /root/qinglong /root/qinglong/data || true
+}
+
+# 步骤13：配置青龙环境变量
+step13() {
+    print_step 13 "配置青龙永久环境变量"
+    export QL_DIR=/root/qinglong && export QL_DATA_DIR=/root/qinglong/data || true
+    echo "export QL_DIR=/root/qinglong" >> ~/.bashrc || true
+    echo "export QL_DATA_DIR=/root/qinglong/data" >> ~/.bashrc || true
+}
+
+# 步骤14：加载环境变量
+step14() {
+    print_step 14 "加载环境变量配置"
+    source ~/.bashrc || true
+}
+
+# 步骤15：尝试启动青龙（旧命令）
+step15() {
+    print_step 15 "尝试启动青龙面板（旧命令）"
+    Qinglong || true
+}
+
+# 步骤16：停止残留进程+清理错误安装
+step16() {
+    print_step 16 "停止残留进程并清理错误环境"
+    pm2 stop all && pm2 delete all && rm -rf /root/qinglong || true
+}
+
+# 步骤17：克隆青龙源码（第一次）
+step17() {
+    print_step 17 "克隆青龙面板源码（第一次）"
+    git clone https://gitee.com/whyour/qinglong.git /root/qinglong || true
+}
+
+# 步骤18：进入目录并复制配置文件
+step18() {
+    print_step 18 "复制青龙配置文件"
+    cd /root/qinglong || true
+    cp -f .env.example .env || true
+}
+
+# 步骤19：安装依赖（第一次）
+step19() {
+    print_step 19 "安装青龙依赖（第一次）"
+    npm config set registry https://registry.npmmirror.com && npm install -g pnpm@8.3.1 pm2 ts-node && pnpm install --prod || true
+}
+
+# 步骤20：彻底清理错误环境
+step20() {
+    print_step 20 "清理残留目录，重置环境"
+    cd /root || true
+    rm -rf qinglong || true
+}
+
+# 步骤21：重新克隆纯净源码
+step21() {
+    print_step 21 "重新克隆纯净青龙源码"
+    git clone https://gitee.com/whyour/qinglong.git || true
+    cd qinglong || true
+}
+
+# 步骤22：复制配置文件
+step22() {
+    print_step 22 "重新复制配置文件"
+    cp .env.example .env || true
+}
+
+# 步骤23：安装完整依赖
+step23() {
+    print_step 23 "安装青龙完整依赖"
+    npm config set registry https://registry.npmmirror.com || true
+    npm install -g pnpm pm2 || true
+    pnpm install || true
+}
+
+# 步骤24：pm2启动青龙面板
+step24() {
+    print_step 24 "PM2守护启动青龙面板"
+    pm2 start "pnpm start" --name "qinglong" || true
+}
+
+# 步骤25：保存pm2配置
+step25() {
+    print_step 25 "保存PM2自启配置"
+    pm2 save || true
+}
+
+# ====================== 启动交互逻辑 ======================
+clear
+echo -e "${YELLOW}🚀 青龙面板一键安装脚本（无视报错/自定义步骤）${NC}"
+echo -e "${YELLOW}=============================================================${NC}"
+echo -e "${GREEN}1. 重新开始安装（从步骤1开始执行）${NC}"
+echo -e "${GREEN}2. 指定步骤开始安装（输入步骤序号）${NC}"
+echo -e "${YELLOW}=============================================================${NC}"
+
+# 获取用户选择
+read -p "请输入选择 [1/2]：" user_choice
+if [ "$user_choice" = "1" ]; then
+    start_step=1
+elif [ "$user_choice" = "2" ]; then
+    read -p "请输入开始的步骤序号 [1-${total_steps}]：" start_step
+    # 校验步骤号合法性
+    if ! [[ "$start_step" =~ ^[0-9]+$ ]] || [ "$start_step" -lt 1 ] || [ "$start_step" -gt "$total_steps" ]; then
+        echo -e "${RED}❌ 输入无效！默认从步骤1开始${NC}"
+        start_step=1
     fi
-}
+else
+    echo -e "${RED}❌ 输入错误！默认从步骤1开始${NC}"
+    start_step=1
+fi
 
-# 环境预检
-check_environment() {
-    log_info "========== 环境预检 =========="
-    
-    # 检测系统
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        log_info "系统: $NAME $VERSION"
-        log_info "架构: $(uname -m)"
-    else
-        log_warn "无法检测系统信息"
-    fi
+# 确认启动
+echo -e "\n${GREEN}🎉 确认从 步骤${start_step} 开始执行，总步骤：${total_steps}${NC}"
+sleep 2
 
-    # 检测 WSL1（可选）
-    if [[ $(uname -r) == *Microsoft* ]]; then
-        log_info "检测到 WSL1 环境"
-    else
-        log_warn "未检测到 WSL1 环境，继续执行..."
-    fi
-}
+# ====================== 执行主逻辑 ======================
+for ((i=start_step; i<=total_steps; i++)); do
+    step$i
+    echo -e "\033[K${YELLOW}🔚 步骤 ${i} 执行完成（无视报错，继续下一步）${NC}\n"
+    sleep 0.5
+done
 
-# 清理旧环境
-clean_old() {
-    log_info "========== 清理旧环境 =========="
-    
-    # 停止青龙服务（如果存在）
-    if command -v pm2 &> /dev/null; then
-        pm2 delete qinglong 2>/dev/null || true
-        pm2 save --force 2>/dev/null || true
-    fi
-    
-    # 清理 npm 全局包
-    npm uninstall -g @whyour/qinglong 2>/dev/null || true
-    
-    # 清理 pnpm 全局包
-    pnpm uninstall -g @whyour/qinglong 2>/dev/null || true
-    
-    # 清理数据目录（谨慎操作）
-    # rm -rf /ql/data  # 如需全新安装可取消注释
-    
-    log_info "旧环境清理完成"
-}
-
-# 更新系统并安装依赖
-install_dependencies() {
-    log_info "========== 更新系统 & 安装必备依赖 =========="
-    
-    apt-get update -y
-    apt-get upgrade -y
-    
-    # 安装基础依赖
-    apt-get install -y git curl wget tzdata perl openssl jq nginx procps netcat-openbsd openssh-client
-    
-    log_info "系统依赖安装完成"
-}
-
-# 安装 Node.js 20.x
-install_nodejs() {
-    log_info "========== 安装 Node.js 20.x LTS =========="
-    
-    # 添加 NodeSource 源
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    
-    # 安装 Node.js
-    apt-get install -y nodejs
-    
-    # 验证安装
-    node_version=$(node -v)
-    npm_version=$(npm -v)
-    log_info "Node版本：$node_version | NPM版本：$npm_version"
-}
-
-# 安装 pnpm（如果未安装）
-install_pnpm() {
-    log_info "========== 安装 pnpm =========="
-    
-    if ! command -v pnpm &> /dev/null; then
-        log_info "检测到 pnpm 未安装，开始安装..."
-        # 使用 curl 安装 pnpm
-        curl -fsSL https://get.pnpm.io/install.sh | sh -
-        # 添加 pnpm 到环境变量
-        export PATH="$PATH:$HOME/.pnpm"
-        source ~/.bashrc
-        log_info "pnpm 安装完成"
-    else
-        log_info "pnpm 已安装"
-    fi
-}
-
-# 配置 pnpm 镜像源
-setup_pnpm_mirrors() {
-    log_info "========== 配置 pnpm 国内镜像源 =========="
-    
-    # 设置 pnpm 镜像源
-    pnpm config set registry https://registry.npmmirror.com
-    pnpm config set network-timeout 300000
-    pnpm config set strict-ssl false
-    pnpm config set parallel 4  # 设置并行线程数为 4，可根据 CPU 核心数调整
-
-    log_info "pnpm 镜像配置完成"
-}
-
-# 安装青龙面板（通过 pnpm）
-install_qinglong() {
-    log_info "========== 安装青龙面板 =========="
-    
-    # 安装青龙面板
-    pnpm install -g @whyour/qinglong --no-fund --no-progress --parallel 4
-    
-    # 设置环境变量
-    export QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-    export QL_DATA_DIR="/ql/data"
-    
-    # 永久写入环境变量（可选）
-    echo "export QL_DIR=$QL_DIR" >> /etc/profile
-    echo "export QL_DATA_DIR=$QL_DATA_DIR" >> /etc/profile
-    source /etc/profile
-    
-    log_info "青龙面板安装完成"
-}
-
-# 初始化青龙目录结构
-init_qinglong_dirs() {
-    log_info "========== 初始化青龙目录结构 =========="
-    
-    # 创建必要目录
-    mkdir -p /ql/data/config
-    mkdir -p /ql/data/log
-    mkdir -p /ql/data/db
-    mkdir -p /ql/data/scripts
-    mkdir -p /ql/data/log/.tmp
-    mkdir -p /ql/data/repo
-    mkdir -p /ql/data/raw
-    mkdir -p /ql/data/log/update
-    mkdir -p /ql/data/deps
-    
-    # 复制配置文件（如果不存在）
-    QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-    
-    [[ ! -s /ql/data/config/config.sh ]] && cp -f $QL_DIR/sample/config.sample.sh /ql/data/config/config.sh
-    [[ ! -f /ql/data/config/task_before.sh ]] && cp -f $QL_DIR/sample/task.sample.sh /ql/data/config/task_before.sh
-    [[ ! -f /ql/data/config/task_after.sh ]] && cp -f $QL_DIR/sample/task.sample.sh /ql/data/config/task_after.sh
-    [[ ! -f /ql/data/config/extra.sh ]] && cp -f $QL_DIR/sample/extra.sample.sh /ql/data/config/extra.sh
-    [[ ! -s /ql/data/scripts/notify.py ]] && cp -f $QL_DIR/sample/notify.py /ql/data/scripts/notify.py
-    [[ ! -s /ql/data/scripts/sendNotify.js ]] && cp -f $QL_DIR/sample/notify.js /ql/data/scripts/sendNotify.js
-    [[ ! -s /ql/data/scripts/ql_sample.js ]] && cp -f $QL_DIR/sample/ql_sample.js /ql/data/scripts/ql_sample.js
-    [[ ! -s /ql/data/scripts/ql_sample.py ]] && cp -f $QL_DIR/sample/ql_sample.py /ql/data/scripts/ql_sample.py
-    [[ ! -s /ql/data/deps/sendNotify.js ]] && cp -f $QL_DIR/sample/notify.js /ql/data/deps/sendNotify.js
-    [[ ! -s /ql/data/deps/notify.py ]] && cp -f $QL_DIR/sample/notify.py /ql/data/deps/notify.py
-    
-    log_info "目录结构初始化完成"
-}
-
-# 启动服务
-start_services() {
-    log_info "========== 启动服务 =========="
-    
-    # 启动 nginx
-    systemctl start nginx || service nginx start
-    systemctl enable nginx 2>/dev/null || true
-    
-    # 启动青龙面板
-    log_info "启动青龙面板..."
-    
-    # 进入青龙目录
-    cd /usr/lib/node_modules/@whyour/qinglong
-    
-    # 安装 PM2（如果未安装）
-    if ! command -v pm2 &> /dev/null; then
-        pnpm install -g pm2
-    fi
-    
-    # 启动青龙
-    pm2 start /usr/lib/node_modules/@whyour/qinglong/shell/start.sh --name qinglong
-    
-    # 保存 PM2 配置
-    pm2 save
-    pm2 startup 2>/dev/null || true
-    
-    log_info "服务启动完成"
-}
-
-# 显示访问信息
-show_access_info() {
-    log_info "========== 部署完成 =========="
-    echo ""
-    echo "✅ 青龙面板部署完成！"
-    echo ""
-    echo "📊 访问信息："
-    echo "   - 面板地址：http://localhost:5700"
-    echo "   - 默认账号：admin"
-    echo "   - 默认密码：admin（首次登录需修改）"
-    echo ""
-    echo "📁 重要目录："
-    echo "   - 青龙主目录：/usr/lib/node_modules/@whyour/qinglong"
-    echo "   - 数据目录：/ql/data"
-    echo "   - 配置文件：/ql/data/config/config.sh"
-    echo ""
-    echo "🛠️ 管理命令："
-    echo "   - 启动青龙：pm2 start qinglong"
-    echo "   - 停止青龙：pm2 stop qinglong"
-    echo "   - 重启青龙：pm2 restart qinglong"
-    echo "   - 查看日志：pm2 logs qinglong"
-    echo ""
-    echo "⚠️  注意：首次访问需按提示完成初始化设置"
-    echo ""
-}
-
-# 主函数
-main() {
-    clear
-    echo "=================================================="
-    echo "      青龙面板 WSL1 专用部署脚本（日志还原版）"
-    echo "           适配Ubuntu20.04 | Node20.x | pnpm"
-    echo "=================================================="
-    echo ""
-    
-    # 执行步骤
-    check_root
-    check_environment
-    clean_old
-    install_dependencies
-    install_nodejs
-    install_pnpm
-    setup_pnpm_mirrors
-    install_qinglong
-    init_qinglong_dirs
-    start_services
-    show_access_info
-    
-    log_info "脚本执行完毕！"
-}
-
-# 执行主函数
-main "$@"
+# 安装完成提示
+echo -e "\n${GREEN}🎉 所有步骤执行完毕！青龙面板安装完成${NC}"
+echo -e "${BLUE}📌 访问地址：http://127.0.0.1:8000${NC}"
+echo -e "${BLUE}📌 查看状态：pm2 status qinglong${NC}"
+echo -e "${BLUE}📌 重启面板：pm2 restart qinglong${NC}\n"

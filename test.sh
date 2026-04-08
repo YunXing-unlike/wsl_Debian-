@@ -1,169 +1,751 @@
 #!/bin/bash
+#
+# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本
+# 
+# 项目地址: https://github.com/yourusername/qinglong-wsl-deploy
+# 描述: 本脚本用于在 WSL1 + Ubuntu 20.04 环境下脱离 Docker 和虚拟化技术部署青龙面板
+# 适用环境: Windows WSL1 + Ubuntu 20.04 LTS
+# 
+# 作者: Assistant
+# 版本: 1.0.0
+# 日期: 2026-04-08
+#
 
-# ==================================================
-# 脚本名称: QingLong Panel 部署脚本 (WSL1专用版)
-# 适用环境: Windows WSL1 (Ubuntu 20.04 LTS)
-# 部署方式: 源码编译部署 (非Docker/非虚拟机)
-# 更新时间: 2026-04-08
-# ==================================================
+# ==============================================================================
+# 颜色定义与输出函数
+# ==============================================================================
 
-# --- 全局配置 ---
-# 设置遇到错误即退出，防止错误蔓延
-set -e 
-
-# 定义颜色输出
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+BOLD='\033[1m'
 
-# 定义安装路径 (建议放在用户目录下)
-QL_DIR="/opt/ql"
-QL_BRANCH="master" # 青龙面板主分支
+# 输出函数
+info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
 
-# GitHub 加速代理 (根据要求6配置)
-GH_PROXY="https://fastgit.cc/"
+success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
 
-echo -e "${GREEN}=== 环境检查与初始化 ===${NC}"
-# 确保在 WSL1 环境中
-if [ -z "$(grep -i microsoft /proc/version)" ]; then
-    echo -e "${RED}警告: 当前可能不在 WSL 环境中，请确认环境正确。${NC}"
-fi
+warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
 
-# --- 步骤 1: 更换国内加速源 (要求5) ---
-echo -e "${GREEN}>>> [1/6] 正在配置阿里云 Ubuntu 20.04 加速源...${NC}"
-# 备份原有源
-sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-# 写入阿里云源 (针对 Ubuntu 20.04 focal)
-sudo tee /etc/apt/sources.list > /dev/null <<EOF
-deb http://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
-EOF
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
 
-# --- 步骤 2: 安装系统依赖 ---
-echo -e "${GREEN}>>> [2/6] 更新软件包列表并安装核心依赖...${NC}"
-sudo apt-get update
-# 安装构建工具、Python3、Node.js 环境依赖
-# 说明：脱离Docker必须手动解决 git, curl, wget, gcc, make 等编译依赖
-sudo apt-get install -y git curl wget unzip tar gcc g++ make python3 python3-pip
+step() {
+    echo -e "\n${CYAN}${BOLD}[STEP $1]${NC} $2"
+}
 
-# --- 步骤 3: 安装 Node.js 环境 (使用 nvm 管理) [Gitee镜像修正版] ---
-echo -e "${GREEN}>>> [3/6] 安装 Node.js 环境 (使用 Gitee 国内镜像加速)...${NC}"
+# ==============================================================================
+# 全局配置变量
+# ==============================================================================
 
-export NVM_DIR="$HOME/.nvm"
+# 国内加速源配置
+GITHUB_MIRROR="https://ghproxy.cxkpro.top"
+NPM_REGISTRY="https://registry.npmmirror.com"
+PYPI_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
+UBUNTU_MIRROR="https://mirrors.aliyun.com/ubuntu"
+NODESOURCE_MIRROR="https://mirrors.aliyun.com/nodejs-release/"
 
-# [核心修补] 放弃失效的 gh.llkk.cc 代理，改用 Gitee 官方镜像源
-# 备注信息：Gitee 是国内稳定的代码托管平台，同步了 NVM 官方仓库，速度极快且稳定
-if [ ! -d "$NVM_DIR/.git" ]; then
-    echo "正在通过 Gitee 克隆 NVM 仓库..."
-    # 使用 Gitee 镜像源，解决 403 和连接超时问题
-    git clone https://gitee.com/mirrors/nvm.git "$NVM_DIR"
+# 青龙面板配置
+QL_VERSION="2.17.10"
+QL_DIR="$HOME/qinglong"
+QL_DATA_DIR="$QL_DIR/data"
+QL_PORT="5700"
+QL_REPO="https://github.com/whyour/qinglong.git"
+
+# Node.js 版本配置
+NODE_VERSION="20.15.1"
+NODE_VERSION_CANVAS="11.15.0"
+
+# Python 版本配置
+PYTHON_VERSION="3.10"
+
+# 日志文件
+LOG_FILE="$HOME/qinglong-install.log"
+ERROR_LOG="$HOME/qinglong-error.log"
+
+# ==============================================================================
+# 初始化函数
+# ==============================================================================
+
+# 初始化日志
+init_log() {
+    echo "========================================" > "$LOG_FILE"
+    echo "青龙面板安装日志 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+    echo "========================================" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+}
+
+# 记录日志
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# 检查命令是否存在
+check_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# 检查WSL版本
+check_wsl_version() {
+    info "检查 WSL 版本..."
     
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}错误: Git 克隆失败。请检查网络连接。${NC}"
+    if ! check_command wsl.exe; then
+        error "未检测到 WSL 环境，请确保在 Windows WSL 环境中运行此脚本"
         exit 1
     fi
-else
-    echo "NVM 仓库已存在，跳过下载。"
+    
+    # 检查WSL版本
+    local wsl_version
+    wsl_version=$(uname -r | grep -i microsoft | wc -l)
+    
+    if [ "$wsl_version" -eq 0 ]; then
+        error "当前不在 WSL 环境中运行"
+        exit 1
+    fi
+    
+    # 检查是否为WSL1
+    local wsl1_check
+    wsl1_check=$(cat /proc/version | grep -c "WSL2")
+    
+    if [ "$wsl1_check" -gt 0 ]; then
+        warning "检测到 WSL2 环境，但脚本为 WSL1 优化"
+        read -p "是否继续安装? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            exit 0
+        fi
+    else
+        success "检测到 WSL1 环境，符合要求"
+    fi
+    
+    log "WSL版本检查通过"
+}
+
+# 检查Ubuntu版本
+check_ubuntu_version() {
+    info "检查 Ubuntu 版本..."
+    
+    if [ ! -f /etc/os-release ]; then
+        error "无法检测操作系统版本"
+        exit 1
+    fi
+    
+    source /etc/os-release
+    
+    if [ "$ID" != "ubuntu" ]; then
+        error "当前系统不是 Ubuntu，检测到: $ID"
+        exit 1
+    fi
+    
+    if [ "$VERSION_ID" != "20.04" ]; then
+        warning "当前 Ubuntu 版本为 $VERSION_ID，建议使用 20.04 LTS"
+        read -p "是否继续安装? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            exit 0
+        fi
+    else
+        success "检测到 Ubuntu 20.04 LTS，符合要求"
+    fi
+    
+    log "Ubuntu版本检查通过: $VERSION_ID"
+}
+
+# ==============================================================================
+# 系统环境准备
+# ==============================================================================
+
+# 配置Ubuntu国内镜像源
+setup_ubuntu_mirror() {
+    step "1" "配置 Ubuntu 国内镜像源"
+    
+    info "备份原始源列表..."
+    sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup.$(date +%Y%m%d) 2>/dev/null || true
+    
+    info "配置阿里云镜像源..."
+    
+    sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
+# 阿里云 Ubuntu 20.04 镜像源
+deb https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
+
+# 源码镜像（可选，注释状态）
+# deb-src https://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
+# deb-src https://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
+# deb-src https://mirrors.aliyun.com/ubuntu/ focal-backports main restricted universe multiverse
+# deb-src https://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
+EOF
+
+    success "Ubuntu 镜像源配置完成"
+    log "Ubuntu镜像源已配置为阿里云"
+    
+    info "更新软件包列表..."
+    sudo apt-get update -y 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ $? -ne 0 ]; then
+        error "软件包列表更新失败，请检查网络连接"
+        exit 1
+    fi
+    
+    success "软件包列表更新完成"
+}
+
+# 安装系统基础依赖
+install_system_deps() {
+    step "2" "安装系统基础依赖"
+    
+    info "正在安装必要的系统依赖..."
+    
+    local deps=(
+        # 基础工具
+        curl wget git vim nano
+        # 构建工具
+        build-essential gcc g++ make
+        # Python 构建依赖
+        software-properties-common
+        libssl-dev zlib1g-dev libbz2-dev
+        libreadline-dev libsqlite3-dev
+        libncursesw5-dev xz-utils tk-dev
+        libxml2-dev libxmlsec1-dev libffi-dev
+        liblzma-dev
+        # Node.js 构建依赖
+        python3-distutils
+        # 其他常用库
+        libcurl4-openssl-dev
+        # Canvas 依赖
+        libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+        # 其他依赖
+        pkg-config
+    )
+    
+    sudo apt-get install -y "${deps[@]}" 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ $? -ne 0 ]; then
+        error "系统依赖安装失败"
+        exit 1
+    fi
+    
+    success "系统基础依赖安装完成"
+    log "系统依赖安装完成"
+}
+
+# ==============================================================================
+# Node.js 环境安装
+# ==============================================================================
+
+# 安装 fnm (Fast Node Manager)
+install_fnm() {
+    step "3" "安装 Node.js 版本管理器 (fnm)"
+    
+    if check_command fnm; then
+        success "fnm 已安装，版本: $(fnm --version)"
+        return 0
+    fi
+    
+    info "正在安装 fnm..."
+    
+    # 使用国内加速源下载 fnm
+    local fnm_url="${GITHUB_MIRROR}/https://github.com/Schniz/fnm/releases/latest/download/fnm-linux.zip"
+    
+    curl -fsSL "$fnm_url" -o /tmp/fnm-linux.zip 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ $? -ne 0 ]; then
+        # 备用方案：直接下载
+        info "主下载源失败，尝试备用方案..."
+        curl -fsSL "https://fnm.vercel.app/install" | bash 2>&1 | tee -a "$LOG_FILE"
+    else
+        unzip -o /tmp/fnm-linux.zip -d /tmp/fnm 2>&1 | tee -a "$LOG_FILE"
+        sudo mv /tmp/fnm/fnm /usr/local/bin/
+        sudo chmod +x /usr/local/bin/fnm
+    fi
+    
+    # 配置 fnm 环境变量
+    info "配置 fnm 环境变量..."
+    
+    if ! grep -q "fnm" "$HOME/.bashrc"; then
+        cat >> "$HOME/.bashrc" << 'EOF'
+
+# fnm (Fast Node Manager) 配置
+export FNM_PATH="$HOME/.local/share/fnm"
+if [ -d "$FNM_PATH" ]; then
+  export PATH="$FNM_PATH:$PATH"
+  eval "$(fnm env)"
 fi
+EOF
+    fi
+    
+    # 立即生效
+    export FNM_PATH="$HOME/.local/share/fnm"
+    export PATH="$FNM_PATH:$PATH"
+    eval "$(fnm env 2>/dev/null || true)"
+    
+    if check_command fnm; then
+        success "fnm 安装成功，版本: $(fnm --version)"
+        log "fnm安装成功"
+    else
+        error "fnm 安装失败"
+        exit 1
+    fi
+}
 
-# [核心修补] 强制加载 nvm 环境
-# 备注信息：必须手动执行 source，否则当前 shell 会话无法识别 nvm 命令
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-    echo "正在加载 NVM 环境..."
-    . "$NVM_DIR/nvm.sh"  # 这里的 . 等同于 source 命令
-else
-    echo -e "${RED}致命错误: nvm.sh 文件未找到，Git 克隆可能不完整。${NC}"
-    exit 1
-fi
+# 配置 fnm 国内镜像
+setup_fnm_mirror() {
+    info "配置 fnm 国内镜像源..."
+    
+    # 添加到 .bashrc
+    if ! grep -q "FNM_NODE_DIST_MIRROR" "$HOME/.bashrc"; then
+        cat >> "$HOME/.bashrc" << EOF
 
-# 设置 nvm 国内镜像源 (极大加速 Node 下载)
-# 备注信息：配置淘宝镜像，加速 Node.js 二进制包下载
-export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
+# fnm 国内镜像源配置
+export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node/"
+EOF
+    fi
+    
+    export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node/"
+    success "fnm 国内镜像源配置完成"
+    log "fnm镜像源配置完成"
+}
 
-# 安装 Node.js (青龙面板推荐 v18)
-echo "正在安装 Node.js v18..."
-nvm install 18
-nvm use 18
-nvm alias default 18
+# 安装 Node.js
+install_nodejs() {
+    step "4" "安装 Node.js 环境"
+    
+    # 重新加载 fnm 环境
+    export PATH="$HOME/.local/share/fnm:$PATH"
+    eval "$(fnm env 2>/dev/null || true)"
+    
+    if ! check_command fnm; then
+        error "fnm 未正确安装"
+        exit 1
+    fi
+    
+    info "安装 Node.js v${NODE_VERSION}..."
+    
+    fnm install "$NODE_VERSION" 2>&1 | tee -a "$LOG_FILE"
+    fnm default "$NODE_VERSION" 2>&1 | tee -a "$LOG_FILE"
+    fnm use "$NODE_VERSION" 2>&1 | tee -a "$LOG_FILE"
+    
+    # 重新加载环境
+    eval "$(fnm env)"
+    
+    if check_command node; then
+        success "Node.js 安装成功"
+        info "Node.js 版本: $(node --version)"
+        info "npm 版本: $(npm --version)"
+        log "Node.js安装成功: $(node --version)"
+    else
+        error "Node.js 安装失败"
+        exit 1
+    fi
+}
 
-# 验证 Node 安装
-echo -e "Node 版本: $(node -v)"
-echo -e "NPM 版本: $(npm -v)"
+# 配置 npm/pnpm 国内镜像
+setup_npm_mirror() {
+    step "5" "配置 npm/pnpm 国内镜像源"
+    
+    info "配置 npm 使用淘宝镜像..."
+    npm config set registry "$NPM_REGISTRY" 2>&1 | tee -a "$LOG_FILE"
+    
+    info "安装 pnpm..."
+    npm install -g pnpm 2>&1 | tee -a "$LOG_FILE"
+    
+    info "配置 pnpm 使用淘宝镜像..."
+    pnpm config set registry "$NPM_REGISTRY" 2>&1 | tee -a "$LOG_FILE"
+    
+    success "npm/pnpm 镜像源配置完成"
+    info "npm registry: $(npm config get registry)"
+    info "pnpm registry: $(pnpm config get registry)"
+    log "npm/pnpm镜像源配置完成"
+}
 
-# 配置 NPM 淘宝镜像源
-npm config set registry https://registry.npmmirror.com
+# ==============================================================================
+# Python 环境安装
+# ==============================================================================
 
-# 安装 pnpm (青龙依赖)
-npm install -g pnpm
-# 配置 pnpm 淘宝镜像源
-pnpm config set registry https://registry.npmmirror.com
+# 安装 Python 3.10
+install_python() {
+    step "6" "安装 Python 3.10 环境"
+    
+    # 检查当前 Python 版本
+    local current_python
+    current_python=$(python3 --version 2>/dev/null | awk '{print $2}' | cut -d. -f1,2)
+    
+    if [ "$current_python" = "3.10" ]; then
+        success "Python 3.10 已安装"
+        return 0
+    fi
+    
+    info "添加 Python 3.10 PPA 源..."
+    sudo add-apt-repository -y ppa:deadsnakes/ppa 2>&1 | tee -a "$LOG_FILE"
+    sudo apt-get update 2>&1 | tee -a "$LOG_FILE"
+    
+    info "安装 Python 3.10..."
+    sudo apt-get install -y python3.10 python3.10-dev python3.10-venv 2>&1 | tee -a "$LOG_FILE"
+    
+    info "安装 pip..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.10 2>&1 | tee -a "$LOG_FILE"
+    
+    # 设置 Python 3.10 为默认版本
+    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
+    sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
+    
+    # 配置 pip 国内镜像
+    info "配置 pip 国内镜像..."
+    mkdir -p "$HOME/.pip"
+    cat > "$HOME/.pip/pip.conf" << EOF
+[global]
+index-url = $PYPI_MIRROR
+trusted-host = pypi.tuna.tsinghua.edu.cn
+EOF
+    
+    # 升级 pip
+    python3 -m pip install --upgrade pip 2>&1 | tee -a "$LOG_FILE"
+    
+    success "Python 3.10 安装完成"
+    info "Python 版本: $(python3 --version)"
+    info "pip 版本: $(pip --version)"
+    log "Python安装完成: $(python3 --version)"
+}
 
-# --- 步骤 4: 安装 PM2 进程守护 ---
-echo -e "${GREEN}>>> [4/6] 安装 PM2 进程管理工具...${NC}"
-# 备注信息：脱离 Docker 容器化后，必须使用 PM2 来守护 Node 进程，保证面板开机自启和崩溃重启
-npm install -g pm2
+# ==============================================================================
+# 青龙面板安装
+# ==============================================================================
 
-# --- 步骤 5: 拉取青龙面板源码 ---
-echo -e "${GREEN}>>> [5/6] 拉取青龙面板源码...${NC}"
-sudo mkdir -p $QL_DIR
-# 赋予当前用户目录权限，避免后续权限问题
-sudo chown -R $(whoami):$(whoami) $QL_DIR
+# 克隆青龙面板源码
+clone_qinglong() {
+    step "7" "下载青龙面板源码"
+    
+    if [ -d "$QL_DIR" ]; then
+        warning "检测到已存在的青龙目录: $QL_DIR"
+        read -p "是否删除并重新安装? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            info "备份旧数据..."
+            mv "$QL_DIR" "$QL_DIR.backup.$(date +%Y%m%d%H%M%S)"
+        else
+            info "使用现有目录继续安装..."
+            return 0
+        fi
+    fi
+    
+    info "克隆青龙面板源码..."
+    info "使用镜像源: ${GITHUB_MIRROR}"
+    
+    local repo_url="${GITHUB_MIRROR}/${QL_REPO}"
+    
+    git clone -b "v${QL_VERSION}" --depth 1 "$repo_url" "$QL_DIR" 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ $? -ne 0 ]; then
+        # 尝试直接克隆
+        info "镜像克隆失败，尝试直接克隆..."
+        git clone -b "v${QL_VERSION}" --depth 1 "$QL_REPO" "$QL_DIR" 2>&1 | tee -a "$LOG_FILE"
+    fi
+    
+    if [ ! -d "$QL_DIR" ]; then
+        error "青龙面板源码克隆失败"
+        exit 1
+    fi
+    
+    success "青龙面板源码下载完成"
+    log "青龙面板源码克隆完成"
+}
 
-cd $QL_DIR
+# 安装青龙面板依赖
+install_qinglong_deps() {
+    step "8" "安装青龙面板依赖"
+    
+    cd "$QL_DIR" || exit 1
+    
+    info "安装 Node.js 依赖..."
+    
+    # 使用 pnpm 安装依赖
+    pnpm install 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ $? -ne 0 ]; then
+        error "Node.js 依赖安装失败"
+        warning "尝试使用 npm 重新安装..."
+        npm install 2>&1 | tee -a "$LOG_FILE"
+        
+        if [ $? -ne 0 ]; then
+            error "依赖安装失败，请检查网络连接"
+            exit 1
+        fi
+    fi
+    
+    success "Node.js 依赖安装完成"
+    log "Node.js依赖安装完成"
+    
+    # 构建前端
+    info "构建前端项目..."
+    pnpm build:front 2>&1 | tee -a "$LOG_FILE" || npm run build:front 2>&1 | tee -a "$LOG_FILE"
+    
+    # 构建后端
+    info "构建后端项目..."
+    pnpm build:back 2>&1 | tee -a "$LOG_FILE" || npm run build:back 2>&1 | tee -a "$LOG_FILE"
+    
+    success "青龙面板构建完成"
+    log "青龙面板构建完成"
+}
 
-# 使用 GitHub 加速代理拉取代码 (要求6)
-# 备注信息：直接访问 GitHub 在国内极不稳定，必须使用 gh.llkk.cc 代理
-if [ ! -d ".git" ]; then
-    echo "正在克隆仓库..."
-    git clone ${GH_PROXY}github.com/whyour/qinglong.git .
-else
-    echo "仓库已存在，正在更新..."
-    git pull
-fi
+# 安装 Python 依赖
+install_python_deps() {
+    step "9" "安装 Python 依赖"
+    
+    info "安装青龙面板 Python 依赖..."
+    
+    local python_deps=(
+        requests
+        canvas
+        ping3
+        jieba
+        aiohttp
+        PyExecJS
+        pycryptodome
+        redis
+        httpx
+        bs4
+    )
+    
+    for dep in "${python_deps[@]}"; do
+        info "安装 $dep..."
+        pip install "$dep" -i "$PYPI_MIRROR" 2>&1 | tee -a "$LOG_FILE"
+    done
+    
+    success "Python 依赖安装完成"
+    log "Python依赖安装完成"
+}
 
-# --- 步骤 6: 安装依赖并构建启动 ---
-echo -e "${GREEN}>>> [6/6] 安装项目依赖并构建...${NC}"
-# 安装依赖
-pnpm install
+# 安装 PM2 进程管理器
+install_pm2() {
+    step "10" "安装 PM2 进程管理器"
+    
+    if check_command pm2; then
+        success "PM2 已安装，版本: $(pm2 --version)"
+        return 0
+    fi
+    
+    info "安装 PM2..."
+    npm install -g pm2 2>&1 | tee -a "$LOG_FILE"
+    
+    if check_command pm2; then
+        success "PM2 安装成功"
+        log "PM2安装成功"
+    else
+        error "PM2 安装失败"
+        exit 1
+    fi
+}
 
-# 构建项目 (源码部署必须步骤)
-pnpm build
+# 配置青龙面板
+configure_qinglong() {
+    step "11" "配置青龙面板"
+    
+    info "创建数据目录..."
+    mkdir -p "$QL_DATA_DIR"/{config,log,db,scripts,repo,raw}
+    
+    info "创建基础配置文件..."
+    
+    # 创建 config.sh 配置文件
+    cat > "$QL_DATA_DIR/config/config.sh" << EOF
+# 青龙面板配置文件
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 
-# 创建必要的目录结构
-mkdir -p $QL_DIR/log $QL_DIR/db $QL_DIR/scripts $QL_DIR/config
+# 面板端口
+export QL_PORT="${QL_PORT}"
 
-# 备份并更新 extra.sh (用于安装 python 依赖)
-cp $QL_DIR/sample/extra.sh $QL_DIR/config/extra.sh
+# 数据目录
+export QL_DATA_DIR="${QL_DATA_DIR}"
 
-echo -e "${GREEN}>>> 部署完成！正在启动青龙面板...${NC}"
+# 日志级别 (debug/info/warn/error)
+export QL_LOG_LEVEL="info"
+
+# 自动更新
+export QL_AUTO_UPDATE="true"
+
+# 通知配置（可选）
+# export PUSH_KEY=""
+# export BARK_PUSH=""
+# export BARK_SOUND=""
+# export DD_BOT_TOKEN=""
+# export DD_BOT_SECRET=""
+# export FSKEY=""
+# export GOBOT_URL=""
+# export GOBOT_QQ=""
+# export GOBOT_TOKEN=""
+EOF
+
+    success "青龙面板基础配置完成"
+    log "青龙面板配置完成"
+}
+
+# 创建启动脚本
+create_start_script() {
+    step "12" "创建启动脚本"
+    
+    info "创建青龙面板启动脚本..."
+    
+    cat > "$QL_DIR/start.sh" << 'EOF'
+#!/bin/bash
+# 青龙面板启动脚本
+
+QL_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$QL_DIR" || exit 1
+
+# 加载环境
+export PATH="$HOME/.local/share/fnm:$PATH"
+eval "$(fnm env 2>/dev/null || true)"
+fnm use default 2>/dev/null || true
+
+# 启动面板
+echo "正在启动青龙面板..."
+echo "数据目录: $QL_DIR/data"
+echo "访问地址: http://localhost:5700"
+echo ""
+
 # 使用 PM2 启动
-# 备注信息：使用 max-memory-restart 防止内存泄漏，name 指定应用名便于管理
-pm2 start $QL_DIR/dist/index.js --name "qinglong" --max-memory-restart 500M
+pm2 delete qinglong 2>/dev/null || true
+pm2 start "./back/app.js" --name qinglong --cwd "$QL_DIR" --log-date-format "YYYY-MM-DD HH:mm:ss"
 
-# 保存 PM2 进程列表
-pm2 save
+echo ""
+echo "青龙面板启动完成！"
+echo "查看日志: pm2 logs qinglong"
+echo "停止服务: pm2 stop qinglong"
+echo "重启服务: pm2 restart qinglong"
+EOF
 
-# 设置 PM2 开机自启 (WSL1 需额外配置 Windows 任务计划，此处仅做 Linux 层面设置)
-pm2 startup
+    chmod +x "$QL_DIR/start.sh"
+    
+    # 创建停止脚本
+    cat > "$QL_DIR/stop.sh" << 'EOF'
+#!/bin/bash
+# 青龙面板停止脚本
 
-# 获取 IP 地址 (WSL1 通常为 eth0)
-IP_ADDR=$(ip addr show eth0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
-if [ -z "$IP_ADDR" ]; then
-    IP_ADDR="127.0.0.1"
-fi
+echo "正在停止青龙面板..."
+pm2 stop qinglong 2>/dev/null || true
+pm2 delete qinglong 2>/dev/null || true
+echo "青龙面板已停止"
+EOF
 
-echo -e "${YELLOW}========================================${NC}"
-echo -e "${GREEN}青龙面板部署成功！${NC}"
-echo -e "访问地址: ${GREEN}http://${IP_ADDR}:5700${NC}"
-echo -e "初始用户名: admin"
-echo -e "初始密码: adminadmin"
-echo -e "请在浏览器打开上述地址进行初始化设置。"
-echo -e "${YELLOW}========================================${NC}"
-echo -e "${RED}提示: 若无法访问，请检查 Windows 防火墙设置或 WSL 网络端口转发。${NC}"
+    chmod +x "$QL_DIR/stop.sh"
+    
+    # 创建状态检查脚本
+    cat > "$QL_DIR/status.sh" << 'EOF'
+#!/bin/bash
+# 青龙面板状态检查脚本
+
+echo "===== 青龙面板运行状态 ====="
+pm2 status qinglong
+
+echo ""
+echo "===== 端口监听状态 ====="
+netstat -tlnp 2>/dev/null | grep 5700 || ss -tlnp | grep 5700 || echo "端口 5700 未监听"
+
+echo ""
+echo "===== 最近日志 ====="
+pm2 logs qinglong --lines 20 --timestamp
+EOF
+
+    chmod +x "$QL_DIR/status.sh"
+    
+    success "启动脚本创建完成"
+    log "启动脚本创建完成"
+}
+
+# ==============================================================================
+# 主安装流程
+# ==============================================================================
+
+main() {
+    clear
+    echo "========================================"
+    echo "  青龙面板 WSL1 Ubuntu 20.04 部署脚本"
+    echo "========================================"
+    echo ""
+    echo "环境要求:"
+    echo "  - Windows WSL1"
+    echo "  - Ubuntu 20.04 LTS"
+    echo "  - 脱离 Docker 部署"
+    echo ""
+    echo "安装路径: $QL_DIR"
+    echo "数据目录: $QL_DATA_DIR"
+    echo "访问端口: $QL_PORT"
+    echo ""
+    echo "========================================"
+    echo ""
+    
+    read -p "是否开始安装? [Y/n]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]?$ ]]; then
+        info "安装已取消"
+        exit 0
+    fi
+    
+    # 初始化日志
+    init_log
+    
+    # 检查环境
+    check_wsl_version
+    check_ubuntu_version
+    
+    # 安装流程
+    setup_ubuntu_mirror
+    install_system_deps
+    install_fnm
+    setup_fnm_mirror
+    install_nodejs
+    setup_npm_mirror
+    install_python
+    install_pm2
+    clone_qinglong
+    install_qinglong_deps
+    install_python_deps
+    configure_qinglong
+    create_start_script
+    
+    # 完成
+    echo ""
+    echo "========================================"
+    success "青龙面板安装完成！"
+    echo "========================================"
+    echo ""
+    echo "启动命令:"
+    echo "  cd $QL_DIR && ./start.sh"
+    echo ""
+    echo "停止命令:"
+    echo "  cd $QL_DIR && ./stop.sh"
+    echo ""
+    echo "状态检查:"
+    echo "  cd $QL_DIR && ./status.sh"
+    echo ""
+    echo "访问地址:"
+    echo "  http://localhost:$QL_PORT"
+    echo ""
+    echo "日志文件:"
+    echo "  $LOG_FILE"
+    echo ""
+    echo "========================================"
+    echo ""
+    
+    log "安装完成"
+    
+    # 询问是否立即启动
+    read -p "是否立即启动青龙面板? [Y/n]: " start_now
+    if [[ "$start_now" =~ ^[Yy]?$ ]]; then
+        cd "$QL_DIR" && ./start.sh
+    fi
+}
+
+# 错误处理
+trap 'error "安装过程中出现错误，请查看日志: $LOG_FILE"' ERR
+
+# 运行主函数
+main "$@"

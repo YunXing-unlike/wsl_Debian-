@@ -73,8 +73,8 @@ npm config set cache /tmp/npm-cache
 npm config set prefix ~/.npm-global  # 避免WSL权限冲突
 
 # 2.4 Git加速配置（ghproxy代理+WSL SSL优化）
-git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"
-git config --global url."https://ghproxy.com/https://gist.github.com/".insteadOf "https://gist.github.com/"
+git config --global url."https://gitproxy.mrhjx.cn/https://github.com/".insteadOf "https://github.com/"
+git config --global url."https://gitproxy.mrhjx.cn/https://gist.github.com/".insteadOf "https://gist.github.com/"
 if [ "$WSL_FLAG" = "WSL" ]; then
     git config --global http.sslVerify false
     git config --global core.compression 9  # 压缩传输提速

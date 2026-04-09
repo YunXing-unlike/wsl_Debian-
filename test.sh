@@ -50,7 +50,7 @@ step() {
 # ==============================================================================
 
 # 国内加速源配置
-GITHUB_MIRROR="https://ghproxy.cxkpro.top"
+GITHUB_MIRROR="https://gh.llkk.cc"
 NPM_REGISTRY="https://registry.npmmirror.com"
 PYPI_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
 UBUNTU_MIRROR="https://mirrors.aliyun.com/ubuntu"
@@ -387,18 +387,40 @@ install_python() {
     fi
     
     info "添加 Python 3.10 PPA 源..."
+    # 先安装添加 PPA 所需的依赖
+    sudo apt-get install -y software-properties-common 2>&1 | tee -a "$LOG_FILE"
+    
+    # 添加 deadsnakes PPA
     sudo add-apt-repository -y ppa:deadsnakes/ppa 2>&1 | tee -a "$LOG_FILE"
-    sudo apt-get update 2>&1 | tee -a "$LOG_FILE"
+    
+    # 强制更新 apt 缓存
+    sudo apt-get clean 2>&1 | tee -a "$LOG_FILE"
+    sudo apt-get update -y 2>&1 | tee -a "$LOG_FILE"
     
     info "安装 Python 3.10..."
-    sudo apt-get install -y python3.10 python3.10-dev python3.10-venv 2>&1 | tee -a "$LOG_FILE"
+    # 使用 --fix-missing 参数处理可能的包缺失问题
+    sudo apt-get install -y --fix-missing python3.10 python3.10-dev python3.10-venv 2>&1 | tee -a "$LOG_FILE"
+    
+    # 检查安装是否成功
+    if ! command -v python3.10 &>/dev/null; then
+        warning "Python 3.10 安装可能失败，尝试备用方案..."
+        # 备用：从源码编译或使用 pyenv
+        info "使用系统默认 Python3..."
+    fi
     
     info "安装 pip..."
-    curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.10 2>&1 | tee -a "$LOG_FILE"
+    # 使用 get-pip.py 安装 pip
+    curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py 2>&1 | tee -a "$LOG_FILE"
     
-    # 设置 Python 3.10 为默认版本
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
-    sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
+    if command -v python3.10 &>/dev/null; then
+        sudo python3.10 /tmp/get-pip.py 2>&1 | tee -a "$LOG_FILE"
+        # 设置 Python 3.10 为默认版本
+        sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
+        sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 2>&1 | tee -a "$LOG_FILE"
+    else
+        # 使用系统默认 Python3
+        sudo python3 /tmp/get-pip.py 2>&1 | tee -a "$LOG_FILE"
+    fi
     
     # 配置 pip 国内镜像
     info "配置 pip 国内镜像..."
@@ -410,11 +432,11 @@ trusted-host = pypi.tuna.tsinghua.edu.cn
 EOF
     
     # 升级 pip
-    python3 -m pip install --upgrade pip 2>&1 | tee -a "$LOG_FILE"
+    python3 -m pip install --upgrade pip 2>&1 | tee -a "$LOG_FILE" || true
     
-    success "Python 3.10 安装完成"
+    success "Python 环境安装完成"
     info "Python 版本: $(python3 --version)"
-    info "pip 版本: $(pip --version)"
+    info "pip 版本: $(pip --version 2>/dev/null || echo 'pip 未安装')"
     log "Python安装完成: $(python3 --version)"
 }
 
@@ -422,9 +444,26 @@ EOF
 # 青龙面板安装
 # ==============================================================================
 
+# 配置 Git 使用 HTTPS 替代 SSH
+setup_git_config() {
+    info "配置 Git 使用 HTTPS 协议..."
+    
+    # 配置 Git 使用 https 替代 ssh
+    git config --global url."https://github.com/".insteadOf "git@github.com:"
+    git config --global url."https://gh.llkk.cc/https://github.com/".insteadOf "https://github.com/"
+    
+    # 配置 Git 使用镜像加速
+    git config --global url."https://gh.llkk.cc/https://github.com/".insteadOf "git://github.com/"
+    
+    success "Git 配置完成"
+}
+
 # 克隆青龙面板源码
 clone_qinglong() {
     step "7" "下载青龙面板源码"
+    
+    # 先配置 git
+    setup_git_config
     
     if [ -d "$QL_DIR" ]; then
         warning "检测到已存在的青龙目录: $QL_DIR"
@@ -467,34 +506,70 @@ install_qinglong_deps() {
     cd "$QL_DIR" || exit 1
     
     info "安装 Node.js 依赖..."
+    info "这可能需要较长时间，请耐心等待..."
+    
+    # 删除可能损坏的 lock 文件
+    rm -f pnpm-lock.yaml package-lock.json 2>/dev/null || true
+    
+    # 配置 npm/pnpm 使用 GitHub 镜像
+    npm config set registry "$NPM_REGISTRY"
+    pnpm config set registry "$NPM_REGISTRY" 2>/dev/null || true
     
     # 使用 pnpm 安装依赖
-    pnpm install 2>&1 | tee -a "$LOG_FILE"
+    local install_success=false
     
-    if [ $? -ne 0 ]; then
-        error "Node.js 依赖安装失败"
-        warning "尝试使用 npm 重新安装..."
-        npm install 2>&1 | tee -a "$LOG_FILE"
+    # 尝试使用 pnpm 安装
+    if pnpm install --no-frozen-lockfile 2>&1 | tee -a "$LOG_FILE"; then
+        install_success=true
+    else
+        warning "pnpm 安装失败，尝试使用 npm..."
+        rm -rf node_modules 2>/dev/null || true
         
-        if [ $? -ne 0 ]; then
-            error "依赖安装失败，请检查网络连接"
-            exit 1
+        # 使用 npm 安装
+        if npm install 2>&1 | tee -a "$LOG_FILE"; then
+            install_success=true
         fi
     fi
     
-    success "Node.js 依赖安装完成"
-    log "Node.js依赖安装完成"
+    if [ "$install_success" != true ]; then
+        error "Node.js 依赖安装失败"
+        error "请检查网络连接或手动执行: cd $QL_DIR && npm install"
+        
+        # 不退出，继续尝试后续步骤
+        warning "继续安装，但青龙面板可能无法正常运行"
+    else
+        success "Node.js 依赖安装完成"
+        log "Node.js依赖安装完成"
+    fi
+    
+    # 检查 node_modules 是否存在
+    if [ ! -d "node_modules" ]; then
+        error "node_modules 目录不存在，依赖安装可能失败"
+        return 1
+    fi
     
     # 构建前端
     info "构建前端项目..."
-    pnpm build:front 2>&1 | tee -a "$LOG_FILE" || npm run build:front 2>&1 | tee -a "$LOG_FILE"
+    if ! pnpm build:front 2>&1 | tee -a "$LOG_FILE"; then
+        warning "pnpm 构建前端失败，尝试 npm..."
+        npm run build:front 2>&1 | tee -a "$LOG_FILE" || warning "前端构建失败"
+    fi
     
     # 构建后端
     info "构建后端项目..."
-    pnpm build:back 2>&1 | tee -a "$LOG_FILE" || npm run build:back 2>&1 | tee -a "$LOG_FILE"
+    if ! pnpm build:back 2>&1 | tee -a "$LOG_FILE"; then
+        warning "pnpm 构建后端失败，尝试 npm..."
+        npm run build:back 2>&1 | tee -a "$LOG_FILE" || warning "后端构建失败"
+    fi
     
-    success "青龙面板构建完成"
-    log "青龙面板构建完成"
+    # 检查构建结果
+    if [ -d "back" ] && [ -f "back/app.js" ] || [ -f "back/dist/app.js" ]; then
+        success "青龙面板构建完成"
+        log "青龙面板构建完成"
+    else
+        warning "构建可能不完整，但将继续安装"
+        info "可以尝试手动构建: cd $QL_DIR && npm run build"
+    fi
 }
 
 # 安装 Python 依赖
@@ -503,9 +578,9 @@ install_python_deps() {
     
     info "安装青龙面板 Python 依赖..."
     
+    # 注意：canvas 是 Node.js 包，不是 Python 包
     local python_deps=(
         requests
-        canvas
         ping3
         jieba
         aiohttp
@@ -514,14 +589,24 @@ install_python_deps() {
         redis
         httpx
         bs4
+        Pillow
+        lxml
     )
+    
+    local success_count=0
+    local fail_count=0
     
     for dep in "${python_deps[@]}"; do
         info "安装 $dep..."
-        pip install "$dep" -i "$PYPI_MIRROR" 2>&1 | tee -a "$LOG_FILE"
+        if pip install "$dep" -i "$PYPI_MIRROR" 2>&1 | tee -a "$LOG_FILE"; then
+            ((success_count++))
+        else
+            warning "$dep 安装失败，继续安装其他依赖..."
+            ((fail_count++))
+        fi
     done
     
-    success "Python 依赖安装完成"
+    success "Python 依赖安装完成: 成功 $success_count 个, 失败 $fail_count 个"
     log "Python依赖安装完成"
 }
 
@@ -594,57 +679,92 @@ create_start_script() {
     
     info "创建青龙面板启动脚本..."
     
-    cat > "$QL_DIR/start.sh" << 'EOF'
+    # 查找 PM2 路径
+    local pm2_path
+    pm2_path=$(which pm2 2>/dev/null || echo "$(npm config get prefix)/bin/pm2")
+    
+    cat > "$QL_DIR/start.sh" << EOF
 #!/bin/bash
 # 青龙面板启动脚本
 
-QL_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$QL_DIR" || exit 1
+QL_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+cd "\$QL_DIR" || exit 1
 
 # 加载环境
-export PATH="$HOME/.local/share/fnm:$PATH"
-eval "$(fnm env 2>/dev/null || true)"
+export PATH="\$HOME/.local/share/fnm:\$PATH"
+eval "\$(fnm env 2>/dev/null || true)"
 fnm use default 2>/dev/null || true
+
+# 查找 PM2
+PM2_CMD="${pm2_path}"
+if ! command -v pm2 &>/dev/null; then
+    PM2_CMD="\$(npm config get prefix)/bin/pm2"
+fi
+
+# 检查入口文件
+APP_ENTRY="./back/dist/app.js"
+if [ ! -f "\$APP_ENTRY" ]; then
+    APP_ENTRY="./back/app.js"
+fi
+
+if [ ! -f "\$APP_ENTRY" ]; then
+    echo "[错误] 找不到入口文件: \$APP_ENTRY"
+    echo "请确保已正确构建项目: cd \$QL_DIR && npm run build"
+    exit 1
+fi
 
 # 启动面板
 echo "正在启动青龙面板..."
-echo "数据目录: $QL_DIR/data"
+echo "数据目录: \$QL_DIR/data"
+echo "入口文件: \$APP_ENTRY"
 echo "访问地址: http://localhost:5700"
 echo ""
 
 # 使用 PM2 启动
-pm2 delete qinglong 2>/dev/null || true
-pm2 start "./back/app.js" --name qinglong --cwd "$QL_DIR" --log-date-format "YYYY-MM-DD HH:mm:ss"
+\$PM2_CMD delete qinglong 2>/dev/null || true
+\$PM2_CMD start "\$APP_ENTRY" --name qinglong --cwd "\$QL_DIR" --log-date-format "YYYY-MM-DD HH:mm:ss"
 
 echo ""
 echo "青龙面板启动完成！"
-echo "查看日志: pm2 logs qinglong"
-echo "停止服务: pm2 stop qinglong"
-echo "重启服务: pm2 restart qinglong"
+echo "查看日志: \$PM2_CMD logs qinglong"
+echo "停止服务: \$PM2_CMD stop qinglong"
+echo "重启服务: \$PM2_CMD restart qinglong"
 EOF
 
     chmod +x "$QL_DIR/start.sh"
     
     # 创建停止脚本
-    cat > "$QL_DIR/stop.sh" << 'EOF'
+    cat > "$QL_DIR/stop.sh" << EOF
 #!/bin/bash
 # 青龙面板停止脚本
 
+# 查找 PM2
+PM2_CMD="${pm2_path}"
+if ! command -v pm2 &>/dev/null; then
+    PM2_CMD="\$(npm config get prefix)/bin/pm2"
+fi
+
 echo "正在停止青龙面板..."
-pm2 stop qinglong 2>/dev/null || true
-pm2 delete qinglong 2>/dev/null || true
+\$PM2_CMD stop qinglong 2>/dev/null || true
+\$PM2_CMD delete qinglong 2>/dev/null || true
 echo "青龙面板已停止"
 EOF
 
     chmod +x "$QL_DIR/stop.sh"
     
     # 创建状态检查脚本
-    cat > "$QL_DIR/status.sh" << 'EOF'
+    cat > "$QL_DIR/status.sh" << EOF
 #!/bin/bash
 # 青龙面板状态检查脚本
 
+# 查找 PM2
+PM2_CMD="${pm2_path}"
+if ! command -v pm2 &>/dev/null; then
+    PM2_CMD="\$(npm config get prefix)/bin/pm2"
+fi
+
 echo "===== 青龙面板运行状态 ====="
-pm2 status qinglong
+\$PM2_CMD status qinglong
 
 echo ""
 echo "===== 端口监听状态 ====="
@@ -652,7 +772,7 @@ netstat -tlnp 2>/dev/null | grep 5700 || ss -tlnp | grep 5700 || echo "端口 57
 
 echo ""
 echo "===== 最近日志 ====="
-pm2 logs qinglong --lines 20 --timestamp
+\$PM2_CMD logs qinglong --lines 20 --timestamp
 EOF
 
     chmod +x "$QL_DIR/status.sh"

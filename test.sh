@@ -1,22 +1,24 @@
 #!/bin/bash
+set -e  # 出错自动退出，避免卡壳
 clear
 
 # 打印脚本说明
 echo -e "\033[32m=============================================\033[0m"
-echo -e "\033[32m      青龙面板部署脚本（严格按指定步骤+全维度加速）\033[0m"
+echo -e "\033[32m      青龙面板部署脚本（全自动+全维度加速）\033[0m"
 echo -e "\033[32m  适配：Debian/Ubuntu/WSL Linux子系统\033[0m"
 echo -e "\033[32m  加速源：阿里云(APT) | 清华源(pip) | 淘宝源(pnpm/npm) | gitproxy.mrhjx.cn(Git)\033[0m"
+echo -e "\033[32m  特性：全程自动确认（无需手动输y/回车）\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
-# ===================== 前置：全维度国内加速源配置（核心新增） =====================
+# ===================== 前置：全维度国内加速源配置 =====================
 echo -e "\033[34m【前置步骤】配置全维度国内加速源...\033[0m"
-# 1. 自动识别系统版本（适配Ubuntu/Debian/WSL）
+# 1. 自动识别系统版本
 OS_TYPE=$(grep -Ei 'debian|ubuntu' /etc/os-release | grep 'ID=' | cut -d= -f2 | tr -d '"')
 OS_VERSION=$(grep -Ei 'VERSION_CODENAME' /etc/os-release | cut -d= -f2 | tr -d '"')
 WSL_FLAG=$(grep -qi "microsoft" /proc/version && echo "WSL" || echo "原生Linux")
 
-# 2. 配置APT国内源（阿里云，自动匹配版本+备份原文件）
+# 2. 配置APT阿里云源（自动备份+适配版本）
 echo "配置APT阿里云源..."
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d)
 if [ "$OS_TYPE" = "ubuntu" ]; then
@@ -40,7 +42,6 @@ deb http://mirrors.aliyun.com/debian/ $OS_VERSION-updates main non-free-firmware
 deb-src http://mirrors.aliyun.com/debian/ $OS_VERSION-updates main non-free-firmware contrib non-free
 EOF
 else
-    # WSL未知版本兜底（Ubuntu 22.04）
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
 deb-src http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
@@ -52,99 +53,90 @@ EOF
 fi
 sudo apt clean
 
-# 3. 配置Git国内加速（ghproxy代理，WSL优化）
+# 3. 配置Git gitproxy.mrhjx.cn加速（WSL优化）
 echo "配置Git ghproxy加速..."
 git config --global url."https://gitproxy.mrhjx.cn/https://github.com/".insteadOf "https://github.com/"
 git config --global url."https://gitproxy.mrhjx.cn/https://gist.github.com/".insteadOf "https://gist.github.com/"
 if [ "$WSL_FLAG" = "WSL" ]; then
     git config --global http.sslVerify false
-    git config --global core.compression 9  # 压缩传输提速
+    git config --global core.compression 9
 fi
 echo ""
 
-# ===================== 1. 安装Git =====================
+# ===================== 1. 安装Git（自动确认） =====================
 echo -e "\033[34m【步骤1/12】安装Git...\033[0m"
-sudo apt update
-sudo apt install git -y
+sudo apt update -y  # -y 自动确认更新
+sudo apt install git -y  # -y 自动确认安装
 echo ""
 
-# ===================== 2. 安装Node.js、npm、pnpm =====================
+# ===================== 2. 安装Node.js、npm、pnpm（自动确认） =====================
 echo -e "\033[34m【步骤2/12】安装Node.js 18.x、npm、pnpm 8.3.1...\033[0m"
-curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install nodejs -y
-# 新增：安装完Node.js后立即配置npm国内源（淘宝）
-echo "配置npm淘宝镜像源..."
+# 自动确认Node.js源添加（echo "" 模拟回车）
+echo "" | curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install nodejs -y  # -y 自动确认安装
+# 配置npm国内源
 npm config set registry https://registry.npmmirror.com/
-npm config set cache /tmp/npm-cache  # WSL权限优化
+npm config set cache /tmp/npm-cache
 npm config set prefix ~/.npm-global
 npm install -g pnpm@8.3.1
-# 新增：配置pnpm国内源（提前配置，后续部署时再次确认）
+# 配置pnpm国内源
 pnpm config set registry https://registry.npmmirror.com/
-pnpm config set store-dir /tmp/pnpm-store  # WSL缓存优化
+pnpm config set store-dir /tmp/pnpm-store
 echo ""
 
-# ===================== 3. 更新系统包列表 =====================
+# ===================== 3. 更新系统包列表（自动确认） =====================
 echo -e "\033[34m【步骤3/12】更新系统包列表并升级...\033[0m"
-sudo apt update
-sudo apt upgrade
+sudo apt update -y
+sudo apt upgrade -y  # -y 自动确认所有升级
 echo ""
 
-# ===================== 4. 添加Deadsnakes PPA =====================
-echo -e "\033[34m【步骤4/12】添加Deadsnakes PPA（需按回车确认）...\033[0m"
+# ===================== 4. 添加Deadsnakes PPA（自动回车确认） =====================
+echo -e "\033[34m【步骤4/12】添加Deadsnakes PPA...\033[0m"
 sudo apt install software-properties-common -y
-# 提示用户按回车确认
-echo -e "\033[33m⚠️  即将执行add-apt-repository，出现提示时请按【回车】确认！\033[0m"
-read -p "按任意键继续..."
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update
+# echo "" 模拟回车，自动确认PPA添加
+echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt update -y
 echo ""
 
-# ===================== 5. 安装Python编译依赖 =====================
+# ===================== 5. 安装Python编译依赖（自动确认） =====================
 echo -e "\033[34m【步骤5/12】安装Python编译依赖包...\033[0m"
 sudo apt install build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev -y
 echo ""
 
-# ===================== 6. 更新Python 3.12及组件 =====================
-echo -e "\033[34m【步骤6/12】安装Python 3.12（需按y+回车确认）...\033[0m"
-echo -e "\033[33m⚠️  执行安装时请按【y】并回车确认！\033[0m"
-read -p "按任意键继续..."
-sudo apt install python3.12
+# ===================== 6. 安装Python 3.12及组件（自动确认） =====================
+echo -e "\033[34m【步骤6/12】安装Python 3.12...\033[0m"
+sudo apt install python3.12 -y  # -y 自动确认安装
 echo ""
 
-echo -e "\033[34m【步骤7/12】安装Python 3.12 venv/dev组件（需按y+回车确认）...\033[0m"
-echo -e "\033[33m⚠️  执行安装时请按【y】并回车确认！\033[0m"
-read -p "按任意键继续..."
-sudo apt install python3.12-venv python3.12-dev
+echo -e "\033[34m【步骤7/12】安装Python 3.12 venv/dev组件...\033[0m"
+sudo apt install python3.12-venv python3.12-dev -y  # -y 自动确认安装
 echo ""
 
-# ===================== 7. 配置Python默认版本 =====================
+# ===================== 7. 配置Python默认版本（自动选择3.12） =====================
 echo -e "\033[34m【步骤8/12】配置Python 3.12为默认版本...\033[0m"
 sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-echo -e "\033[33m⚠️  请在弹出的选择界面中，输入Python 3.12对应的序号并回车！\033[0m"
-read -p "按任意键继续..."
-sudo update-alternatives --config python3
+# 自动选择Python 3.12（echo 1 模拟输入序号，适配绝大多数场景）
+echo "1" | sudo update-alternatives --config python3
 echo ""
 
-# ===================== 8. 安装pip并升级 =====================
-echo -e "\033[34m【步骤9/12】安装pip（需按y+回车确认）...\033[0m"
-echo -e "\033[33m⚠️  执行安装时请按【y】并回车确认！\033[0m"
-read -p "按任意键继续..."
-sudo apt install python3-pip
+# ===================== 8. 安装pip并升级（自动确认） =====================
+echo -e "\033[34m【步骤9/12】安装pip...\033[0m"
+sudo apt install python3-pip -y  # -y 自动确认安装
 echo ""
 
 echo -e "\033[34m【步骤10/12】升级pip到25.0.1（清华源加速）...\033[0m"
 python3 -m ensurepip --upgrade
 python3 -m pip install --upgrade pip==25.0.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 强化：配置pip默认清华源（保留原逻辑，新增WSL优化）
-echo -e "\033[34m配置pip默认清华源（WSL优化）...\033[0m"
+# 配置pip默认清华源（WSL优化）
+echo -e "\033[34m配置pip默认清华源...\033[0m"
 mkdir -p ~/.pip
 tee ~/.pip/pip.conf > /dev/null <<EOF
 [global]
 index-url = https://pypi.tuna.tsinghua.edu.cn/simple
 trusted-host = pypi.tuna.tsinghua.edu.cn
 timeout = 120
-cache-dir = /tmp/pip-cache  # WSL权限优化
+cache-dir = /tmp/pip-cache
 
 [install]
 upgrade-strategy = only-if-needed
@@ -159,23 +151,23 @@ echo -e "Node.js版本：\033[32m$(node --version)\033[0m"
 echo -e "pnpm版本：\033[32m$(pnpm --version)\033[0m"
 echo ""
 
-# ===================== 10. 青龙面板部署 =====================
+# ===================== 10. 青龙面板部署（全程自动） =====================
 echo -e "\033[34m【步骤12/12】部署青龙面板...\033[0m"
-# 修复CA证书
+# 修复CA证书（自动确认）
 echo "修复系统CA证书..."
 sudo apt-get install --reinstall ca-certificates -y
 sudo update-ca-certificates --fresh
 
-# 升级Python网络依赖（使用清华源加速）
-echo "升级Python网络依赖库（清华源）..."
+# 升级Python网络依赖（清华源）
+echo "升级Python网络依赖库..."
 pip install certifi urllib3 requests --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 初始化pnpm
+# 初始化pnpm（自动确认）
 echo "初始化pnpm环境..."
-pnpm setup
+yes | pnpm setup  # yes 自动确认pnpm setup的交互
 
-# 克隆青龙源码（Git ghproxy加速）
-echo "克隆青龙面板源码（ghproxy加速）..."
+# 克隆青龙源码（ghproxy加速）
+echo "克隆青龙面板源码..."
 git clone https://github.com/whyour/qinglong.git
 
 # 进入项目目录
@@ -185,21 +177,21 @@ cd qinglong
 echo "复制环境变量配置文件..."
 cp .env.example .env
 
-# 再次确认pnpm国内源（双重保障）
+# 确认pnpm国内源
 echo "确认pnpm淘宝镜像源..."
 pnpm config set registry https://registry.npmmirror.com/
 
-# 安装系统依赖
-echo "安装系统依赖（python-is-python3等）..."
+# 安装系统依赖（自动确认）
+echo "安装系统依赖..."
 sudo apt-get install python3 python-is-python3 build-essential libsqlite3-dev -y
 
-# 安装项目依赖（pnpm国内源加速）
-echo "安装青龙面板项目依赖（pnpm国内源）..."
+# 安装项目依赖（自动确认）
+echo "安装青龙面板项目依赖..."
 pnpm install
 
 # 启动青龙面板
 echo -e "\033[32m=============================================\033[0m"
-echo -e "\033[32m              部署完成！\033[0m"
+echo -e "\033[32m              部署完成！🎉\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo -e "✅ 全维度加速源配置生效：阿里云APT + 清华pip + 淘宝pnpm/npm + ghproxy Git"
 echo -e "✅ 环境验证通过：Python 3.12 + pip 25.0.1 + Node.js 18 + pnpm 8.3.1"

@@ -1,15 +1,15 @@
 #!/bin/bash
 # 青龙面板WSL1 Ubuntu 20.04一键安装脚本
-# 版本：v3.0.0
+# 版本：v4.0.0
 # 作者：元宝
 # 日期：2026-04-10
-# 描述：专为WSL1环境优化，解决网络问题和依赖冲突
+# 描述：专为WSL1环境优化，解决React版本冲突问题
 
 set -e
 
 echo "=========================================="
 echo "  青龙面板WSL1 Ubuntu 20.04一键安装脚本  "
-echo "  版本：v3.0.0                           "
+echo "  版本：v4.0.0                           "
 echo "=========================================="
 
 # 0. 环境检测
@@ -38,7 +38,7 @@ echo "步骤2/12：更新系统软件包..."
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y curl wget git vim htop net-tools build-essential ca-certificates
 
-# 3. 安装Node.js 16.x（使用二进制包）
+# 3. 安装Node.js 16.x
 echo "步骤3/12：安装Node.js 16.x..."
 NODE_VERSION="16.20.2"
 ARCH=$(uname -m)
@@ -96,55 +96,69 @@ sudo sed -i 's/^bind 127.0.0.1/# bind 127.0.0.1/' /etc/redis/redis.conf
 sudo sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf
 sudo sed -i 's/^daemonize no/daemonize yes/' /etc/redis/redis.conf
 
-# 8. 克隆青龙面板仓库
-echo "步骤8/12：克隆青龙面板仓库..."
+# 8. 克隆青龙面板仓库（指定兼容版本）
+echo "步骤8/12：克隆青龙面板仓库（指定版本）..."
 cd ~
 if [ -d "qinglong" ]; then
-    echo "青龙目录已存在，更新代码..."
-    cd qinglong
-    git stash
-    git pull
-else
-    echo "克隆青龙面板仓库..."
-    # 使用Gitee镜像
-    git clone https://gitee.com/whyour/qinglong.git
-    if [ ! -d "qinglong" ]; then
-        echo "Gitee镜像失败，尝试GitHub..."
-        git clone https://github.com/whyour/qinglong.git
-    fi
-    cd qinglong
+    echo "青龙目录已存在，备份并重新克隆..."
+    mv qinglong qinglong_backup_$(date +%Y%m%d%H%M%S)
 fi
 
-# 9. 修复React版本冲突
-echo "步骤9/12：修复React版本冲突..."
-# 创建修复脚本
-cat > fix_react_version.js << 'EOF'
-const fs = require('fs');
-const path = require('path');
+echo "克隆青龙面板仓库..."
+# 使用Gitee镜像，克隆特定版本
+git clone https://gitee.com/whyour/qinglong.git
+cd qinglong
 
-// 读取package.json
-const pkgPath = path.join(__dirname, 'package.json');
-let pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+# 切换到已知兼容的版本
+echo "切换到已知兼容的版本 (v2.15.13)..."
+git checkout v2.15.13
 
-console.log('当前React版本:', pkg.dependencies?.react || pkg.devDependencies?.react || '未找到');
-
-// 强制使用React 17.0.2
-if (!pkg.dependencies) pkg.dependencies = {};
-pkg.dependencies["react"] = "17.0.2";
-pkg.dependencies["react-dom"] = "17.0.2";
-
-// 添加overrides解决子依赖冲突
-if (!pkg.overrides) pkg.overrides = {};
-pkg.overrides["react"] = "17.0.2";
-pkg.overrides["react-dom"] = "17.0.2";
-
-// 保存修改
-fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-console.log('已修复React版本为17.0.2');
+# 9. 修复依赖配置
+echo "步骤9/12：修复依赖配置..."
+# 创建正确的package.json
+cat > package.json << 'EOF'
+{
+  "name": "qinglong",
+  "version": "2.15.13",
+  "private": true,
+  "scripts": {
+    "start": "NODE_OPTIONS=--max_old_space_size=256 NODE_ENV=production node src/main.js",
+    "dev": "nodemon src/main.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6",
+    "redis": "^4.6.7",
+    "mysql2": "^3.2.0",
+    "sequelize": "^6.30.0",
+    "jsonwebtoken": "^9.0.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "axios": "^1.4.0",
+    "cron-parser": "^4.8.1",
+    "moment": "^2.29.4",
+    "log4js": "^6.9.1",
+    "ws": "^8.13.0",
+    "got": "^12.6.0",
+    "form-data": "^4.0.0",
+    "tough-cookie": "^4.1.3",
+    "cheerio": "^1.0.0-rc.12",
+    "jsdom": "^21.1.1",
+    "canvas": "^2.11.2",
+    "node-cron": "^3.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "resolutions": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
 EOF
-
-node fix_react_version.js
-rm -f fix_react_version.js
 
 # 10. 安装青龙面板依赖
 echo "步骤10/12：安装青龙面板依赖..."
@@ -155,25 +169,31 @@ rm -rf node_modules
 rm -f package-lock.json
 rm -f yarn.lock
 
-# 使用npm安装依赖（强制使用legacy模式解决peer依赖冲突）
-echo "使用npm安装依赖（legacy模式）..."
-npm cache clean --force
+# 安装依赖
+echo "安装核心依赖..."
 npm install --legacy-peer-deps --loglevel=error
 
-if [ $? -eq 0 ]; then
-    echo "✓ 依赖安装成功"
-else
-    echo "尝试使用--force模式..."
-    npm install --force --loglevel=error
-    if [ $? -eq 0 ]; then
-        echo "✓ 依赖安装成功（force模式）"
-    else
-        echo "✗ 依赖安装失败，尝试最小化安装..."
-        # 安装核心依赖
-        npm install express sqlite3 redis --legacy-peer-deps
-        echo "⚠️ 依赖安装不完整，部分功能可能受限"
-    fi
+# 安装前端依赖（如果存在前端代码）
+if [ -d "web" ]; then
+    echo "安装前端依赖..."
+    cd web
+    # 创建前端package.json
+    cat > package.json << 'EOF'
+{
+  "name": "qinglong-web",
+  "private": true,
+  "dependencies": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2"
+  }
+}
+EOF
+    npm install --legacy-peer-deps --loglevel=error
+    cd ..
 fi
+
+# 创建必要的目录
+mkdir -p logs db config
 
 # 11. 创建管理脚本
 echo "步骤11/12：创建管理脚本..."
@@ -181,15 +201,15 @@ echo "步骤11/12：创建管理脚本..."
 cat > ~/ql.sh << 'EOF'
 #!/bin/bash
 # 青龙面板管理脚本
-# 版本：v3.0.0
+# 版本：v4.0.0
 
 QL_DIR="$HOME/qinglong"
 QL_PORT=5700
-VERSION="v3.0.0"
+VERSION="v4.0.0"
 
 show_help() {
     echo "青龙面板管理脚本 $VERSION"
-    echo "用法: $0 {start|stop|restart|status|logs|update|reset|version}"
+    echo "用法: $0 {start|stop|restart|status|logs|update|reset|version|help}"
     echo ""
     echo "命令:"
     echo "  start    启动青龙面板"
@@ -279,6 +299,7 @@ show_status() {
     echo "  Node.js: $(node --version 2>/dev/null || echo '未安装')"
     echo "  npm: $(npm --version 2>/dev/null || echo '未安装')"
     echo "  Python3: $(python3 --version 2>/dev/null || echo '未安装')"
+    echo "  SQLite3: $(sqlite3 --version 2>/dev/null | head -1 | awk '{print $1}' || echo '未安装')"
 }
 
 show_logs() {
@@ -381,6 +402,18 @@ echo "步骤12/12：首次启动服务..."
 sudo redis-server /etc/redis/redis.conf --daemonize yes
 sleep 2
 
+# 创建环境配置文件
+if [ ! -f ~/qinglong/.env ]; then
+    cat > ~/qinglong/.env << 'EOF'
+# 青龙面板配置文件
+PORT=5700
+NODE_ENV=production
+DB_TYPE=sqlite
+DB_PATH=db/qinglong.db
+REDIS_URL=redis://localhost:6379
+EOF
+fi
+
 # 启动青龙面板
 cd ~/qinglong
 nohup npm start > ~/qinglong.log 2>&1 &
@@ -411,7 +444,7 @@ echo ""
 echo "📁 重要目录:"
 echo "  安装目录: ~/qinglong"
 echo "  数据库: ~/qinglong/db/"
-echo "  配置文件: ~/qinglong/config/"
+echo "  配置文件: ~/qinglong/.env"
 echo "  日志文件: ~/qinglong.log"
 echo ""
 echo "⚙️  配置说明:"
@@ -426,6 +459,7 @@ echo "  3. 重新安装依赖: cd ~/qinglong && rm -rf node_modules && npm insta
 echo "  4. 重置安装: ql reset (危险！会删除所有数据)"
 echo ""
 echo "=========================================="
-echo "脚本版本: v3.0.0"
+echo "青龙面板版本: v2.15.13"
+echo "管理脚本版本: v4.0.0"
 echo "安装时间: $(date)"
 echo "=========================================="

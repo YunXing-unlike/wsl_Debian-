@@ -149,10 +149,12 @@ echo ""
 echo -e "\033[34m【步骤4/10】安装pnpm 10.x...\033[0m"
 
 install_pnpm() {
-    # 方案1：使用npm全局安装（最可靠）
+    # 方案1：使用npm全局安装（最可靠，处理文件已存在情况）
     if command -v npm &>/dev/null; then
         echo "尝试使用npm安装pnpm..."
-        sudo npm install -g pnpm@10.6.2 && {
+        # 先删除可能存在的旧版本
+        sudo rm -f /usr/bin/pnpm /usr/local/bin/pnpm 2>/dev/null || true
+        sudo npm install -g pnpm@10.6.2 --force && {
             echo -e "\033[32mpnpm通过npm安装成功: $(pnpm --version)\033[0m"
             return 0
         }
@@ -192,7 +194,7 @@ if install_pnpm; then
     :
 else
     echo -e "\033[31m所有pnpm安装方案均失败，尝试安装pnpm 9.x作为最后回退...\033[0m"
-    sudo npm install -g pnpm@9.15.0 || {
+    sudo npm install -g pnpm@9.15.0 --force || {
         echo -e "\033[31m错误：无法安装pnpm，脚本终止\033[0m"
         exit 1
     }
@@ -380,16 +382,24 @@ sudo apt install -y python-is-python3 2>/dev/null || {
     sudo ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
 }
 
+# 检测是否需要 --break-system-packages（Debian 12+/Ubuntu 24.04+）
+PIP_ARGS=""
+if [ "$OS_TYPE" = "debian" ] && [ "$OS_VERSION" = "bookworm" ] || [ "$OS_VERSION" = "trixie" ]; then
+    PIP_ARGS="--break-system-packages"
+elif [ "$OS_TYPE" = "ubuntu" ] && [ "$OS_VERSION" = "noble" ] || [ "$OS_VERSION" = "oracular" ] || [ "$OS_VERSION" = "plucky" ]; then
+    PIP_ARGS="--break-system-packages"
+fi
+
 # 安装/升级pip
 echo "安装并配置pip..."
 curl -sS https://bootstrap.pypa.io/get-pip.py 2>/dev/null | sudo python${PYTHON_VERSION} 2>/dev/null || {
     # 备用方案
     sudo apt install -y python3-pip
-    python3 -m pip install --upgrade pip
+    python3 -m pip install --upgrade pip $PIP_ARGS
 }
 
 # 升级pip并配置清华源
-python3 -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || true
+python3 -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple $PIP_ARGS 2>/dev/null || true
 
 # 配置pip默认源
 mkdir -p ~/.pip
@@ -404,8 +414,8 @@ cache-dir = /tmp/pip-cache
 upgrade-strategy = only-if-needed
 EOF
 
-# 安装关键Python包
-pip install --user certifi urllib3 requests --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || true
+# 安装关键Python包（使用 --break-system-packages 如果需要）
+pip install --user certifi urllib3 requests --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple $PIP_ARGS 2>/dev/null || true
 
 echo ""
 

@@ -84,15 +84,25 @@ EOF
 fi
 
 sudo apt clean
-sudo apt update -y
+sudo apt update -y || true  # 允许更新失败继续执行
 echo ""
 
-# ===================== 步骤1：安装基础工具（必须先安装git）====================
-echo -e "\033[34m【步骤1/10】安装基础工具(Git/curl/wget/ca-certificates)...\033[0m"
-sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
+# ===================== 步骤1：安装基础工具（区分Ubuntu/Debian）====================
+echo -e "\033[34m【步骤1/10】安装基础工具...\033[0m"
+
+if [ "$OS_TYPE" = "ubuntu" ]; then
+    # Ubuntu 安装 software-properties-common 用于add-apt-repository
+    sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
+elif [ "$OS_TYPE" = "debian" ]; then
+    # Debian 不需要 software-properties-common，使用其他方式添加源
+    sudo apt install -y git curl wget ca-certificates apt-transport-https gnupg lsb-release
+else
+    # 通用安装
+    sudo apt install -y git curl wget ca-certificates apt-transport-https gnupg lsb-release || true
+fi
 echo ""
 
-# ===================== 步骤2：配置Git国内加速（现在git已安装）====================
+# ===================== 步骤2：配置Git国内加速 =====================
 echo -e "\033[34m【步骤2/10】配置Git国内加速...\033[0m"
 GIT_PROXY_LIST=(
     "https://ghfast.top/https://github.com/"
@@ -180,7 +190,7 @@ declare -A PYTHON_VERSION_MAP=(
     ["oracular"]="3.12"   # 24.10 - 原生3.12
     ["plucky"]="3.13"     # 25.04 - 原生3.13（开发版）
     # Debian版本
-    ["trixie"]="3.13"     # 13 - 原生3.13 [^49^][^50^]
+    ["trixie"]="3.13"     # 13 - 原生3.13
     ["bookworm"]="3.11"   # 12 - 原生3.11
     ["bullseye"]="3.9"    # 11 - 原生3.9
     ["buster"]="3.7"      # 10 - 原生3.7
@@ -208,23 +218,41 @@ install_python() {
         return 0
     fi
     
-    # 如果失败且是Ubuntu，尝试Deadsnakes PPA
-    if [ "$OS_TYPE" = "ubuntu" ] && [ "$py_ver" != "3.12" ] && [ "$py_ver" != "3.13" ]; then
-        echo "尝试通过Deadsnakes PPA安装 ${py_ver}..."
-        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || {
-            # 手动添加PPA（兼容WSL）
-            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F23C5A6CF475977595C89F51BA6932366A755776 2>/dev/null || true
-            echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${OS_VERSION} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
-        }
-        sudo apt update -y
-        
-        # 再次尝试安装
-        if sudo apt install -y ${py_pkg} ${py_pkg}-venv ${py_pkg}-dev ${py_pkg}-distutils 2>/dev/null; then
-            echo -e "\033[32m${py_pkg} 通过PPA安装成功\033[0m"
-            PYTHON_VERSION="${py_ver}"
-            PYTHON_INSTALLED=true
+    return 1
+}
+
+# 添加Deadsnakes PPA（仅Ubuntu，修复GPG问题）
+add_deadsnakes_ppa() {
+    local codename=$1
+    echo "添加Deadsnakes PPA..."
+    
+    # 方法1：使用add-apt-repository（如果可用）
+    if command -v add-apt-repository &>/dev/null; then
+        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null && return 0
+    fi
+    
+    # 方法2：手动添加源和密钥（兼容WSL）
+    echo "手动添加PPA源和GPG密钥..."
+    
+    # 添加源
+    echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+    
+    # 添加GPG密钥（多种方式尝试）
+    # 方式1：使用apt-key（传统方式，Ubuntu 20.04/22.04支持）
+    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && return 0
+    
+    # 方式2：使用gpg导入（新方式，Ubuntu 24.04+）
+    if command -v gpg &>/dev/null; then
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/deadsnakes.gpg \
+            --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && {
+            echo "deb [signed-by=/usr/share/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
             return 0
-        fi
+        }
+    fi
+    
+    # 方式3：使用curl获取密钥（最后尝试）
+    if curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" 2>/dev/null | sudo apt-key add - 2>/dev/null; then
+        return 0
     fi
     
     return 1
@@ -246,11 +274,15 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
         jammy)
             # Ubuntu 22.04 - 尝试3.11，回退3.10
             echo "Ubuntu 22.04 尝试安装Python 3.11..."
+            # 添加PPA
+            add_deadsnakes_ppa "jammy" && sudo apt update -y
             install_python "3.11" || install_python "3.10" || install_python "3.8"
             ;;
         focal)
             # Ubuntu 20.04 - 尝试3.10，回退3.8
             echo "Ubuntu 20.04 尝试安装Python 3.10..."
+            # 添加PPA
+            add_deadsnakes_ppa "focal" && sudo apt update -y
             install_python "3.10" || install_python "3.9" || install_python "3.8"
             ;;
         *)
@@ -263,7 +295,7 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
 elif [ "$OS_TYPE" = "debian" ]; then
     case $OS_VERSION in
         trixie)
-            # Debian 13 - 原生Python 3.13 [^49^][^50^]
+            # Debian 13 - 原生Python 3.13
             echo "Debian 13 (Trixie) 使用原生Python 3.13..."
             install_python "3.13" || install_python "3.11"
             ;;

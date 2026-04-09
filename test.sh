@@ -541,7 +541,7 @@ for attempt in 1 2 3; do
     fi
     
     echo "直连失败，尝试使用代理..."
-    git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+    git config --global url."https://github.com/".insteadOf "https://github.com/"
     
     if git clone --depth 1 https://github.com/whyour/qinglong.git 2>/dev/null; then
         clone_success=true

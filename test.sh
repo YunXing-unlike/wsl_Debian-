@@ -31,26 +31,57 @@ WSL_FLAG=$(grep -qi "microsoft" /proc/version && echo "WSL" || echo "原生Linux
 echo "配置APT阿里云源..."
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d)
 if [ "$OS_TYPE" = "ubuntu" ]; then
+    # Ubuntu版本映射（兼容旧版本codename）
+    case $OS_VERSION in
+        focal)
+            CODENAME="focal"
+            ;;
+        jammy)
+            CODENAME="jammy"
+            ;;
+        noble)
+            CODENAME="noble"
+            ;;
+        *)
+            CODENAME="jammy"  # 默认 fallback 到 jammy
+            ;;
+    esac
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
-deb http://mirrors.aliyun.com/ubuntu/ $OS_VERSION main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ $OS_VERSION main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-security main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-security main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-updates main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-updates main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-backports main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ $OS_VERSION-backports main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ $CODENAME main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ $CODENAME-security main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-security main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ $CODENAME-updates main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
 EOF
 elif [ "$OS_TYPE" = "debian" ]; then
+    # Debian版本映射
+    case $OS_VERSION in
+        bookworm)
+            CODENAME="bookworm"
+            ;;
+        bullseye)
+            CODENAME="bullseye"
+            ;;
+        buster)
+            CODENAME="buster"
+            ;;
+        *)
+            CODENAME="bookworm"
+            ;;
+    esac
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
-deb http://mirrors.aliyun.com/debian/ $OS_VERSION main non-free-firmware contrib non-free
-deb-src http://mirrors.aliyun.com/debian/ $OS_VERSION main non-free-firmware contrib non-free
-deb http://mirrors.aliyun.com/debian-security/ $OS_VERSION-security main non-free-firmware contrib non-free
-deb-src http://mirrors.aliyun.com/debian-security/ $OS_VERSION-security main non-free-firmware contrib non-free
-deb http://mirrors.aliyun.com/debian/ $OS_VERSION-updates main non-free-firmware contrib non-free
-deb-src http://mirrors.aliyun.com/debian/ $OS_VERSION-updates main non-free-firmware contrib non-free
+deb http://mirrors.aliyun.com/debian/ $CODENAME main non-free-firmware contrib non-free
+deb-src http://mirrors.aliyun.com/debian/ $CODENAME main non-free-firmware contrib non-free
+deb http://mirrors.aliyun.com/debian-security/ $CODENAME-security main non-free-firmware contrib non-free
+deb-src http://mirrors.aliyun.com/debian-security/ $CODENAME-security main non-free-firmware contrib non-free
+deb http://mirrors.aliyun.com/debian/ $CODENAME-updates main non-free-firmware contrib non-free
+deb-src http://mirrors.aliyun.com/debian/ $CODENAME-updates main non-free-firmware contrib non-free
 EOF
 else
+    # 兜底配置
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
 deb-src http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
@@ -112,11 +143,65 @@ sudo apt update -y
 sudo apt upgrade -y
 echo ""
 
-# ===================== 4. 添加Deadsnakes PPA（自动回车确认） =====================
-echo -e "\033[34m【步骤4/12】添加Deadsnakes PPA...\033[0m"
+# ===================== 4. 安装Python（适配不同系统版本） =====================
+echo -e "\033[34m【步骤4/12】安装Python（自动适配系统版本）...\033[0m"
+# 安装基础依赖
 sudo apt install software-properties-common -y
-echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update -y
+
+# 根据系统类型选择Python版本
+if [ "$OS_TYPE" = "ubuntu" ]; then
+    # Ubuntu不同版本的Python支持
+    case $OS_VERSION in
+        # Ubuntu 20.04 (focal) 不支持3.12，用3.10（系统自带）
+        focal)
+            echo "检测到Ubuntu 20.04，安装Python 3.10（兼容版本）..."
+            sudo apt install python3.10 python3.10-venv python3.10-dev -y
+            PYTHON_VERSION="3.10"
+            ;;
+        # Ubuntu 22.04+ 支持3.12
+        jammy|noble)
+            echo "添加Deadsnakes PPA..."
+            echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
+            sudo apt update -y
+            echo "安装Python 3.12..."
+            sudo apt install python3.12 python3.12-venv python3.12-dev -y
+            PYTHON_VERSION="3.12"
+            ;;
+        *)
+            # 未知Ubuntu版本，安装3.10
+            echo "未知Ubuntu版本，安装Python 3.10..."
+            sudo apt install python3.10 python3.10-venv python3.10-dev -y
+            PYTHON_VERSION="3.10"
+            ;;
+    esac
+elif [ "$OS_TYPE" = "debian" ]; then
+    # Debian系统
+    case $OS_VERSION in
+        # Debian 12 (bookworm) 自带3.11
+        bookworm)
+            echo "检测到Debian 12，安装Python 3.11..."
+            sudo apt install python3.11 python3.11-venv python3.11-dev -y
+            PYTHON_VERSION="3.11"
+            ;;
+        # Debian 11 (bullseye) 自带3.9
+        bullseye)
+            echo "检测到Debian 11，安装Python 3.9..."
+            sudo apt install python3.9 python3.9-venv python3.9-dev -y
+            PYTHON_VERSION="3.9"
+            ;;
+        *)
+            # 兜底安装Python 3.9
+            echo "未知Debian版本，安装Python 3.9..."
+            sudo apt install python3.9 python3.9-venv python3.9-dev -y
+            PYTHON_VERSION="3.9"
+            ;;
+    esac
+else
+    # WSL/其他系统，默认安装3.10
+    echo "检测到WSL/其他系统，安装Python 3.10..."
+    sudo apt install python3.10 python3.10-venv python3.10-dev -y
+    PYTHON_VERSION="3.10"
+fi
 echo ""
 
 # ===================== 5. 安装Python编译依赖（自动确认） =====================
@@ -124,29 +209,22 @@ echo -e "\033[34m【步骤5/12】安装Python编译依赖包...\033[0m"
 sudo apt install build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev -y
 echo ""
 
-# ===================== 6. 安装Python 3.12及组件（自动确认） =====================
-echo -e "\033[34m【步骤6/12】安装Python 3.12...\033[0m"
-sudo apt install python3.12 -y
-echo ""
-
-echo -e "\033[34m【步骤7/12】安装Python 3.12 venv/dev组件...\033[0m"
-sudo apt install python3.12-venv python3.12-dev -y
-echo ""
-
-# ===================== 7. 配置Python默认版本（自动选择3.12） =====================
-echo -e "\033[34m【步骤8/12】配置Python 3.12为默认版本...\033[0m"
-sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+# ===================== 6. 配置Python默认版本 =====================
+echo -e "\033[34m【步骤6/12】配置Python $PYTHON_VERSION 为默认版本...\033[0m"
+sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python$PYTHON_VERSION 1
 echo "1" | sudo update-alternatives --config python3
+# 修复python命令指向
+sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 echo ""
 
-# ===================== 8. 安装pip并升级（自动确认） =====================
-echo -e "\033[34m【步骤9/12】安装pip...\033[0m"
+# ===================== 7. 安装pip并升级（自动确认） =====================
+echo -e "\033[34m【步骤7/12】安装pip...\033[0m"
 sudo apt install python3-pip -y
 echo ""
 
-echo -e "\033[34m【步骤10/12】升级pip到25.0.1（清华源加速）...\033[0m"
+echo -e "\033[34m【步骤8/12】升级pip（清华源加速）...\033[0m"
 python3 -m ensurepip --upgrade
-python3 -m pip install --upgrade pip==25.0.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
+python3 -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 配置pip默认清华源
 echo -e "\033[34m配置pip默认清华源...\033[0m"
@@ -163,16 +241,16 @@ upgrade-strategy = only-if-needed
 EOF
 echo ""
 
-# ===================== 9. 环境版本验证 =====================
-echo -e "\033[34m【步骤11/12】验证环境版本...\033[0m"
+# ===================== 8. 环境版本验证 =====================
+echo -e "\033[34m【步骤9/12】验证环境版本...\033[0m"
 echo -e "Python版本：\033[32m$(python3 --version | awk '{print $2}')\033[0m"
 echo -e "pip版本：\033[32m$(pip3 --version | awk '{print $2}' | cut -d'/' -f1)\033[0m"
 echo -e "Node.js版本：\033[32m$(node --version)\033[0m"
 echo -e "pnpm版本：\033[32m$(pnpm --version)\033[0m"
 echo ""
 
-# ===================== 10. 青龙面板部署（全程自动） =====================
-echo -e "\033[34m【步骤12/12】部署青龙面板...\033[0m"
+# ===================== 9. 青龙面板部署（全程自动） =====================
+echo -e "\033[34m【步骤10/12】部署青龙面板...\033[0m"
 # 修复CA证书
 echo "修复系统CA证书..."
 sudo apt-get install --reinstall ca-certificates -y
@@ -214,7 +292,7 @@ echo -e "\033[32m=============================================\033[0m"
 echo -e "\033[32m              部署完成！🎉\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo -e "✅ 全维度加速源配置生效：阿里云APT + 清华pip + 淘宝pnpm/npm + gitproxy.mrhjx.cn Git"
-echo -e "✅ 环境验证通过：Python 3.12 + pip 25.0.1 + Node.js 18 + pnpm 8.3.1"
+echo -e "✅ 环境验证通过：Python $PYTHON_VERSION + pip 最新版 + Node.js 18 + pnpm 8.3.1"
 echo -e "✅ 青龙面板依赖安装完成，即将启动..."
 echo -e "📌 访问地址：http://localhost:5700"
 echo -e "📌 如需重启面板：cd ~/qinglong && pnpm start"

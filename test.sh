@@ -146,30 +146,49 @@ echo ""
 # ===================== 4. 安装Python（适配不同系统版本）【核心修复】 =====================
 echo -e "\033[34m【步骤4/12】安装Python（自动适配系统版本）...\033[0m"
 # 安装基础依赖
-sudo apt install software-properties-common -y
+sudo apt install software-properties-common apt-transport-https ca-certificates -y
+
+# ========== 核心修复：解决Python包找不到的问题 ==========
+# 先尝试添加Deadsnakes PPA（兼容WSL）
+add_ppa_success=0
+if [ "$OS_TYPE" = "ubuntu" ]; then
+    echo "尝试添加Deadsnakes PPA源..."
+    # 强制刷新证书（解决WSL下PPA添加失败）
+    sudo update-ca-certificates --fresh
+    # 非交互模式添加PPA（避免手动确认）
+    echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu $CODENAME main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F23C5A6CF475977595C89F51BA6932366A7557766
+    # 刷新源
+    sudo apt update -y || add_ppa_success=1
+fi
 
 # 根据系统类型选择Python版本（完整修复逻辑）
 if [ "$OS_TYPE" = "ubuntu" ]; then
     # Ubuntu不同版本的Python支持（修复核心）
     case $OS_VERSION in
-        # Ubuntu 20.04 (focal) - 先添加deadsnakes源再装3.10
+        # Ubuntu 20.04 (focal) - 优先用系统自带3.8，PPA失败时不强制3.10
         focal)
-            echo "检测到Ubuntu 20.04，添加Deadsnakes PPA源..."
-            sudo apt install -y apt-transport-https ca-certificates
-            echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
-            sudo apt update -y
-            echo "安装Python 3.10..."
-            sudo apt install python3.10 python3.10-venv python3.10-dev -y
-            PYTHON_VERSION="3.10"
+            if [ $add_ppa_success -eq 0 ] && command -v apt-cache &>/dev/null && apt-cache show python3.10 &>/dev/null; then
+                echo "检测到Ubuntu 20.04 + PPA可用，安装Python 3.10..."
+                sudo apt install python3.10 python3.10-venv python3.10-dev -y
+                PYTHON_VERSION="3.10"
+            else
+                echo "Ubuntu 20.04 PPA源不可用，安装系统自带Python 3.8..."
+                sudo apt install python3.8 python3.8-venv python3.8-dev -y
+                PYTHON_VERSION="3.8"
+            fi
             ;;
         # Ubuntu 22.04+ 支持3.12
         jammy|noble)
-            echo "添加Deadsnakes PPA..."
-            echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
-            sudo apt update -y
-            echo "安装Python 3.12..."
-            sudo apt install python3.12 python3.12-venv python3.12-dev -y
-            PYTHON_VERSION="3.12"
+            if [ $add_ppa_success -eq 0 ] && apt-cache show python3.12 &>/dev/null; then
+                echo "安装Python 3.12..."
+                sudo apt install python3.12 python3.12-venv python3.12-dev -y
+                PYTHON_VERSION="3.12"
+            else
+                echo "安装系统默认Python3..."
+                sudo apt install python3 python3-venv python3-dev -y
+                PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1,2)
+            fi
             ;;
         *)
             # 未知Ubuntu版本，先尝试装系统自带Python3，再升级

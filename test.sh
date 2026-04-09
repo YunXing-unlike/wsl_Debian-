@@ -92,6 +92,7 @@ deb-src http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe
 EOF
 fi
 sudo apt clean
+sudo apt update -y  # 刷新源（关键修复：新增这一步）
 
 # 3. 配置Git国内加速（替换为gitproxy.mrhjx.cn）
 echo "配置Git gitproxy.mrhjx.cn加速..."
@@ -105,7 +106,6 @@ echo ""
 
 # ===================== 1. 安装Git（自动确认） =====================
 echo -e "\033[34m【步骤1/12】安装Git...\033[0m"
-sudo apt update -y
 sudo apt install git -y
 echo ""
 
@@ -143,18 +143,22 @@ sudo apt update -y
 sudo apt upgrade -y
 echo ""
 
-# ===================== 4. 安装Python（适配不同系统版本） =====================
+# ===================== 4. 安装Python（适配不同系统版本）【核心修复】 =====================
 echo -e "\033[34m【步骤4/12】安装Python（自动适配系统版本）...\033[0m"
 # 安装基础依赖
 sudo apt install software-properties-common -y
 
-# 根据系统类型选择Python版本
+# 根据系统类型选择Python版本（完整修复逻辑）
 if [ "$OS_TYPE" = "ubuntu" ]; then
-    # Ubuntu不同版本的Python支持
+    # Ubuntu不同版本的Python支持（修复核心）
     case $OS_VERSION in
-        # Ubuntu 20.04 (focal) 不支持3.12，用3.10（系统自带）
+        # Ubuntu 20.04 (focal) - 先添加deadsnakes源再装3.10
         focal)
-            echo "检测到Ubuntu 20.04，安装Python 3.10（兼容版本）..."
+            echo "检测到Ubuntu 20.04，添加Deadsnakes PPA源..."
+            sudo apt install -y apt-transport-https ca-certificates
+            echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
+            sudo apt update -y
+            echo "安装Python 3.10..."
             sudo apt install python3.10 python3.10-venv python3.10-dev -y
             PYTHON_VERSION="3.10"
             ;;
@@ -168,14 +172,15 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
             PYTHON_VERSION="3.12"
             ;;
         *)
-            # 未知Ubuntu版本，安装3.10
-            echo "未知Ubuntu版本，安装Python 3.10..."
-            sudo apt install python3.10 python3.10-venv python3.10-dev -y
-            PYTHON_VERSION="3.10"
+            # 未知Ubuntu版本，先尝试装系统自带Python3，再升级
+            echo "未知Ubuntu版本，安装系统默认Python3..."
+            sudo apt install python3 python3-venv python3-dev -y
+            PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1,2)
+            echo "当前系统Python版本：$PYTHON_VERSION"
             ;;
     esac
 elif [ "$OS_TYPE" = "debian" ]; then
-    # Debian系统
+    # Debian系统（修复：优先装系统自带版本）
     case $OS_VERSION in
         # Debian 12 (bookworm) 自带3.11
         bookworm)
@@ -189,18 +194,24 @@ elif [ "$OS_TYPE" = "debian" ]; then
             sudo apt install python3.9 python3.9-venv python3.9-dev -y
             PYTHON_VERSION="3.9"
             ;;
+        # Debian 10 (buster) 自带3.7
+        buster)
+            echo "检测到Debian 10，安装Python 3.7..."
+            sudo apt install python3.7 python3.7-venv python3.7-dev -y
+            PYTHON_VERSION="3.7"
+            ;;
         *)
-            # 兜底安装Python 3.9
-            echo "未知Debian版本，安装Python 3.9..."
-            sudo apt install python3.9 python3.9-venv python3.9-dev -y
-            PYTHON_VERSION="3.9"
+            # 兜底安装系统默认Python3
+            echo "未知Debian版本，安装系统默认Python3..."
+            sudo apt install python3 python3-venv python3-dev -y
+            PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1,2)
             ;;
     esac
 else
-    # WSL/其他系统，默认安装3.10
-    echo "检测到WSL/其他系统，安装Python 3.10..."
-    sudo apt install python3.10 python3.10-venv python3.10-dev -y
-    PYTHON_VERSION="3.10"
+    # WSL/其他系统，默认安装系统自带Python3（修复：兼容所有WSL）
+    echo "检测到WSL/其他系统，安装系统默认Python3..."
+    sudo apt install python3 python3-venv python3-dev -y
+    PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1,2)
 fi
 echo ""
 
@@ -211,9 +222,14 @@ echo ""
 
 # ===================== 6. 配置Python默认版本 =====================
 echo -e "\033[34m【步骤6/12】配置Python $PYTHON_VERSION 为默认版本...\033[0m"
-sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python$PYTHON_VERSION 1
-echo "1" | sudo update-alternatives --config python3
-# 修复python命令指向
+# 修复：兼容系统默认Python（避免update-alternatives报错）
+if command -v python$PYTHON_VERSION &>/dev/null; then
+    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python$PYTHON_VERSION 1
+    echo "1" | sudo update-alternatives --config python3 || true
+else
+    echo "使用系统默认Python3..."
+fi
+# 修复python命令指向（容错）
 sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 echo ""
 

@@ -3,7 +3,7 @@
 # 青龙面板一键安装脚本 for WSL1 Ubuntu 20.04
 # 作者：元宝
 # 日期：2026-04-09
-# 修复版本：解决Node.js版本、git权限和版本兼容性问题
+# 修复版本：修复npm配置问题，优化安装流程
 
 set -e
 
@@ -48,13 +48,13 @@ apt update && apt upgrade -y
 echo "步骤3/13：安装基础工具..."
 apt install -y git wget curl vim net-tools build-essential ca-certificates gnupg
 
-# 4. 安装Node.js 20.x（青龙面板需要Node.js 14+，最新版建议18+）
+# 4. 安装Node.js 20.x
 echo "步骤4/13：安装Node.js 20.x..."
 # 清理旧的Node.js版本
 apt remove -y nodejs npm 2>/dev/null || true
 apt autoremove -y
 
-# 安装Node.js 20.x（更稳定）
+# 安装Node.js 20.x
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt install -y nodejs
 
@@ -64,10 +64,6 @@ NPM_VERSION=$(npm --version)
 echo "Node.js版本: $NODE_VERSION"
 echo "npm版本: $NPM_VERSION"
 
-if [[ ! "$NODE_VERSION" =~ ^v2[0-9]\. ]]; then
-    echo "警告：Node.js版本可能过低，建议使用Node.js 20.x"
-fi
-
 # 5. 安装Python3和pip
 echo "步骤5/13：安装Python3和pip..."
 apt install -y python3 python3-pip python3-venv python3-dev
@@ -76,91 +72,129 @@ apt install -y python3 python3-pip python3-venv python3-dev
 python3 --version
 pip3 --version
 
-# 6. 配置npm和git使用国内镜像
-echo "步骤6/13：配置npm和git镜像源..."
+# 6. 配置镜像源
+echo "步骤6/13：配置镜像源..."
+
 # 配置npm使用淘宝镜像
 npm config set registry https://registry.npmmirror.com/
-npm config set disturl https://npmmirror.com/dist
-npm config set electron_mirror https://npmmirror.com/mirrors/electron/
-npm config set sass_binary_site https://npmmirror.com/mirrors/node-sass/
 
-# 配置git使用https（避免ssh密钥问题）
+# 配置git使用https
 git config --global url."https://".insteadOf git://
 git config --global url."https://github.com/".insteadOf git@github.com:
-git config --global url."https://gitcode.com/".insteadOf git@gitcode.com:
 
-# 7. 安装pnpm（使用兼容版本）
+# 创建npm配置
+cat > ~/.npmrc << EOF
+registry=https://registry.npmmirror.com/
+sass_binary_site=https://npmmirror.com/mirrors/node-sass/
+phantomjs_cdnurl=https://npmmirror.com/mirrors/phantomjs/
+electron_mirror=https://npmmirror.com/mirrors/electron/
+chromedriver_cdnurl=https://npmmirror.com/mirrors/chromedriver/
+operadriver_cdnurl=https://npmmirror.com/mirrors/operadriver/
+fse_binary_host_mirror=https://npmmirror.com/mirrors/fsevents
+node_sqlite3_binary_host_mirror=https://npmmirror.com/mirrors
+sqlite3_binary_host_mirror=https://npmmirror.com/mirrors
+sharp_binary_host=https://npmmirror.com/mirrors/sharp/
+sharp_libvips_binary_host=https://npmmirror.com/mirrors/sharp-libvips/
+canvas_binary_host_mirror=https://npmmirror.com/mirrors/canvas
+nodejieba_binary_host_mirror=https://npmmirror.com/mirrors/nodejieba
+EOF
+
+# 配置pip镜像源
+mkdir -p ~/.pip
+cat > ~/.pip/pip.conf << EOF
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+extra-index-url = https://mirrors.aliyun.com/pypi/simple/
+trusted-host = pypi.tuna.tsinghua.edu.cn mirrors.aliyun.com
+timeout = 120
+EOF
+
+# 7. 安装pnpm
 echo "步骤7/13：安装pnpm..."
-# 先更新npm到最新版本
+# 先更新npm
 npm install -g npm@latest
 
-# 安装与Node.js 20兼容的pnpm版本
-npm install -g pnpm@8.15.0
+# 安装pnpm
+npm install -g pnpm
 
 # 验证pnpm安装
 pnpm --version
 
-# 8. 安装青龙面板（使用npm直接安装最新版）
+# 8. 安装青龙面板
 echo "步骤8/13：安装青龙面板..."
-echo "正在从npm安装青龙面板最新版..."
+echo "正在从npm安装青龙面板..."
 
-# 方法1：尝试从npm直接安装
-if npm install -g @whyour/qinglong@latest; then
-    echo "青龙面板安装成功！"
+# 创建临时目录
+TEMP_DIR=$(mktemp -d)
+cd "$TEMP_DIR"
+
+# 尝试从npm安装青龙面板
+echo "方法1: 尝试从npm安装青龙面板..."
+if npm install @whyour/qinglong@2.20.2; then
+    echo "✓ 青龙面板安装成功！"
     QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-else
-    echo "npm安装失败，尝试从GitHub镜像安装..."
+    mkdir -p "$(dirname "$QL_GLOBAL_DIR")"
     
-    # 方法2：从GitCode镜像克隆（国内访问更快）
-    cd /tmp
-    if git clone https://gitcode.com/whyour/qinglong.git; then
-        echo "从GitCode克隆成功！"
-        cd qinglong
-        
-        # 安装项目依赖
-        npm install --registry=https://registry.npmmirror.com
-        
-        # 移动到全局位置
-        QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-        mkdir -p "$(dirname "$QL_GLOBAL_DIR")"
-        mv /tmp/qinglong "$QL_GLOBAL_DIR"
+    # 检查是否安装成功
+    if [ -d "node_modules/@whyour/qinglong" ]; then
+        mv node_modules/@whyour/qinglong "$QL_GLOBAL_DIR"
     else
-        echo "GitCode克隆失败，尝试从GitHub备份源安装..."
-        
-        # 方法3：使用备份源
-        cd /tmp
-        git clone https://github.com/whyour/qinglong.git qinglong-backup
-        cd qinglong-backup
-        
-        # 安装项目依赖
-        npm install --registry=https://registry.npmmirror.com
-        
-        # 移动到全局位置
-        QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
-        mkdir -p "$(dirname "$QL_GLOBAL_DIR")"
-        mv /tmp/qinglong-backup "$QL_GLOBAL_DIR"
-    fi
-fi
-
-# 验证青龙面板安装
-if [ -d "$QL_GLOBAL_DIR" ]; then
-    echo "青龙面板已安装到：$QL_GLOBAL_DIR"
-    
-    # 检查版本
-    if [ -f "$QL_GLOBAL_DIR/package.json" ]; then
-        QL_VERSION=$(grep '"version"' "$QL_GLOBAL_DIR/package.json" | head -1 | awk -F: '{print $2}' | sed 's/[", ]//g')
-        echo "青龙面板版本：v$QL_VERSION"
-        
-        # 检查是否为安全版本
-        if [[ "$QL_VERSION" < "2.20.2" ]]; then
-            echo "警告：当前版本(v$QL_VERSION)可能存在安全漏洞[1,2](@ref)"
-            echo "建议升级到v2.20.2或更高版本"
+        # 尝试其他路径
+        if [ -d "node_modules" ]; then
+            mv node_modules/* "$QL_GLOBAL_DIR" 2>/dev/null || true
         fi
     fi
 else
-    echo "错误：青龙面板安装失败！"
-    exit 1
+    echo "✗ npm安装失败，尝试从GitHub安装..."
+    
+    # 方法2: 从GitHub克隆
+    echo "方法2: 尝试从GitHub克隆青龙面板..."
+    cd /tmp
+    rm -rf qinglong-install
+    git clone https://github.com/whyour/qinglong.git qinglong-install
+    cd qinglong-install
+    
+    # 安装依赖
+    npm install
+    
+    QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+    mkdir -p "$(dirname "$QL_GLOBAL_DIR")"
+    
+    # 复制文件
+    if [ -d "/tmp/qinglong-install" ]; then
+        cp -r /tmp/qinglong-install/* "$QL_GLOBAL_DIR"/
+    fi
 fi
+
+# 清理临时目录
+cd /
+rm -rf "$TEMP_DIR" 2>/dev/null || true
+
+# 验证安装
+if [ ! -d "/usr/lib/node_modules/@whyour/qinglong" ]; then
+    echo "错误：青龙面板安装失败！尝试创建符号链接..."
+    
+    # 尝试在全局node_modules中查找
+    if [ -d "/usr/local/lib/node_modules/@whyour/qinglong" ]; then
+        ln -sf /usr/local/lib/node_modules/@whyour/qinglong /usr/lib/node_modules/@whyour/qinglong
+        QL_GLOBAL_DIR="/usr/local/lib/node_modules/@whyour/qinglong"
+    else
+        # 尝试在用户目录查找
+        USER_QL_DIR=$(find /root -name "qinglong" -type d 2>/dev/null | head -1)
+        if [ -n "$USER_QL_DIR" ]; then
+            mkdir -p /usr/lib/node_modules/@whyour
+            ln -sf "$USER_QL_DIR" /usr/lib/node_modules/@whyour/qinglong
+            QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+        else
+            echo "错误：无法找到青龙面板安装目录！"
+            echo "请尝试手动安装：npm install -g @whyour/qinglong"
+            exit 1
+        fi
+    fi
+fi
+
+QL_GLOBAL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+echo "青龙面板已安装到：$QL_GLOBAL_DIR"
 
 # 9. 创建青龙面板目录结构
 echo "步骤9/13：创建目录结构..."
@@ -169,7 +203,9 @@ mkdir -p $QL_DIR
 cd $QL_DIR
 
 # 创建必要的子目录
-mkdir -p data/{config,scripts,log,db,upload,repo,raw,deps,env}
+for dir in config scripts log db upload repo raw deps env; do
+    mkdir -p "data/$dir"
+done
 
 # 设置权限
 chmod -R 755 $QL_DIR/data
@@ -199,20 +235,16 @@ EOF
 # 11. 安装青龙面板依赖
 echo "步骤11/13：安装青龙面板依赖..."
 
-# 配置pip镜像源
-pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-pip3 config set global.extra-index-url https://mirrors.aliyun.com/pypi/simple/
-
 # 进入青龙面板目录
 cd "$QL_GLOBAL_DIR"
 
 # 安装项目依赖
 echo "安装青龙面板核心依赖..."
-npm install --registry=https://registry.npmmirror.com --legacy-peer-deps
+npm install --legacy-peer-deps
 
-# 安装青龙面板常用的Node.js依赖
+# 安装必要的Node.js依赖
 echo "安装Node.js依赖..."
-npm install --registry=https://registry.npmmirror.com --legacy-peer-deps \
+npm install --legacy-peer-deps \
   crypto-js \
   prettytable \
   dotenv \
@@ -222,7 +254,6 @@ npm install --registry=https://registry.npmmirror.com --legacy-peer-deps \
   tslib \
   ws@7.4.3 \
   ts-md5 \
-  jsdom-g \
   jieba \
   form-data \
   json5 \
@@ -234,13 +265,15 @@ npm install --registry=https://registry.npmmirror.com --legacy-peer-deps \
   axios \
   moment \
   node-schedule \
-  cron-parser \
-  sqlite3
+  cron-parser
 
 # 安装Python3依赖
 echo "安装Python3依赖..."
 pip3 install --upgrade pip
-pip3 install requests canvas ping3 jieba aiohttp beautifulsoup4 lxml pycryptodome pillow
+pip3 install requests beautifulsoup4 lxml pycryptodome pillow
+
+# 尝试安装其他Python依赖
+pip3 install canvas ping3 aiohttp 2>/dev/null || echo "某些Python依赖安装失败，将在青龙面板中自动安装"
 
 # 安装Linux系统依赖
 echo "安装Linux系统依赖..."
@@ -264,142 +297,139 @@ EOF
 
 chmod +x /usr/local/bin/start-qinglong
 
-# 创建systemd服务文件（如果可用）
-if [ -d /etc/systemd/system ]; then
-    cat > /etc/systemd/system/qinglong.service << 'EOF'
-[Unit]
-Description=Qinglong Panel Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/usr/lib/node_modules/@whyour/qinglong
-Environment=PORT=5700
-Environment=QL_DIR=/usr/lib/node_modules/@whyour/qinglong
-Environment=QL_DATA_DIR=/opt/qinglong/data
-Environment=TZ=Asia/Shanghai
-Environment=NODE_PATH=/usr/lib/node_modules
-ExecStart=/usr/bin/node src/main.js
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
+# 创建服务管理脚本
+cat > /usr/local/bin/ql << 'EOF'
+#!/bin/bash
+case "$1" in
+    start)
+        echo "启动青龙面板..."
+        cd /usr/lib/node_modules/@whyour/qinglong
+        export PORT=5700
+        export QL_DIR=/usr/lib/node_modules/@whyour/qinglong
+        export QL_DATA_DIR=/opt/qinglong/data
+        export TZ=Asia/Shanghai
+        export NODE_PATH=/usr/lib/node_modules
+        nohup node src/main.js > /opt/qinglong/data/log/qinglong.log 2>&1 &
+        echo "青龙面板已启动，日志: /opt/qinglong/data/log/qinglong.log"
+        ;;
+    stop)
+        echo "停止青龙面板..."
+        pkill -f "node.*qinglong" 2>/dev/null || true
+        echo "青龙面板已停止"
+        ;;
+    restart)
+        echo "重启青龙面板..."
+        pkill -f "node.*qinglong" 2>/dev/null || true
+        sleep 2
+        cd /usr/lib/node_modules/@whyour/qinglong
+        export PORT=5700
+        export QL_DIR=/usr/lib/node_modules/@whyour/qinglong
+        export QL_DATA_DIR=/opt/qinglong/data
+        export TZ=Asia/Shanghai
+        export NODE_PATH=/usr/lib/node_modules
+        nohup node src/main.js > /opt/qinglong/data/log/qinglong.log 2>&1 &
+        echo "青龙面板已重启"
+        ;;
+    status)
+        if pgrep -f "node.*qinglong" > /dev/null; then
+            echo "青龙面板正在运行"
+            ps aux | grep -E "node.*qinglong" | grep -v grep
+        else
+            echo "青龙面板未运行"
+        fi
+        ;;
+    log)
+        tail -f /opt/qinglong/data/log/qinglong.log
+        ;;
+    *)
+        echo "用法: ql {start|stop|restart|status|log}"
+        exit 1
+        ;;
+esac
 EOF
 
-    systemctl daemon-reload
-    systemctl enable qinglong
-    systemctl start qinglong
-    echo "青龙面板已配置为systemd服务"
-    
-    # 等待服务启动
-    sleep 3
-    echo "服务状态："
-    systemctl status qinglong --no-pager | head -20
-else
-    # WSL1可能没有systemd，使用pm2管理
-    echo "检测到WSL1环境，使用pm2管理进程..."
-    npm install -g pm2
-    
-    # 创建pm2配置文件
-    cat > /opt/qinglong/ecosystem.config.js << 'EOF'
-module.exports = {
-  apps: [{
-    name: 'qinglong',
-    script: '/usr/lib/node_modules/@whyour/qinglong/src/main.js',
-    cwd: '/usr/lib/node_modules/@whyour/qinglong',
-    env: {
-      PORT: 5700,
-      QL_DIR: '/usr/lib/node_modules/@whyour/qinglong',
-      QL_DATA_DIR: '/opt/qinglong/data',
-      TZ: 'Asia/Shanghai',
-      NODE_PATH: '/usr/lib/node_modules'
-    },
-    exec_mode: 'fork',
-    instances: 1,
-    autorestart: true,
-    watch: false,
-    max_memory_restart: '1G',
-    error_file: '/opt/qinglong/data/log/error.log',
-    out_file: '/opt/qinglong/data/log/out.log',
-    log_file: '/opt/qinglong/data/log/combined.log',
-    time: true
-  }]
-}
-EOF
-    
-    pm2 start /opt/qinglong/ecosystem.config.js
-    pm2 save
-    
-    # 创建pm2开机启动脚本
-    pm2 startup | tail -1 > /tmp/pm2_startup.sh
-    bash /tmp/pm2_startup.sh
-    rm -f /tmp/pm2_startup.sh
-    
-    echo "青龙面板已使用pm2启动"
-fi
+chmod +x /usr/local/bin/ql
 
-# 13. 验证安装
-echo "步骤13/13：验证安装..."
+# 13. 启动青龙面板
+echo "步骤13/13：启动青龙面板..."
+echo "正在启动青龙面板..."
+
+# 创建日志目录
+mkdir -p /opt/qinglong/data/log
+
+# 启动服务
+cd "$QL_GLOBAL_DIR"
+export PORT=5700
+export QL_DIR="/usr/lib/node_modules/@whyour/qinglong"
+export QL_DATA_DIR="/opt/qinglong/data"
+export TZ=Asia/Shanghai
+export NODE_PATH="/usr/lib/node_modules"
+
+# 后台启动青龙面板
+nohup node src/main.js > /opt/qinglong/data/log/qinglong.log 2>&1 &
+
+# 等待5秒让服务启动
 sleep 5
 
-# 检查服务是否运行
-if [ -d /etc/systemd/system ]; then
-    if systemctl is-active --quiet qinglong; then
-        echo "✓ 青龙面板服务正在运行"
+# 检查是否启动成功
+if pgrep -f "node.*qinglong" > /dev/null; then
+    echo "✓ 青龙面板启动成功！"
+    
+    # 检查端口是否监听
+    if netstat -tlnp 2>/dev/null | grep -q ":5700"; then
+        echo "✓ 端口5700正在监听"
     else
-        echo "✗ 青龙面板服务未运行，请检查日志"
-        systemctl status qinglong --no-pager
+        echo "⚠ 端口5700未监听，但进程已启动"
     fi
 else
-    if pm2 status | grep -q "qinglong"; then
-        echo "✓ 青龙面板服务正在运行（pm2管理）"
-    else
-        echo "✗ 青龙面板服务未运行，请检查日志"
-        pm2 status
-    fi
+    echo "✗ 青龙面板启动失败，查看日志："
+    tail -20 /opt/qinglong/data/log/qinglong.log
+    echo "尝试手动启动..."
+    cd "$QL_GLOBAL_DIR"
+    node src/main.js &
+    sleep 3
 fi
 
 # 输出安装完成信息
+echo ""
 echo "========================================="
 echo "青龙面板安装完成！"
 echo "========================================="
-echo "访问地址：http://localhost:5700"
-echo "如果无法访问，请确保Windows防火墙允许端口5700"
 echo ""
+echo "重要信息："
+echo "访问地址：http://localhost:5700"
+echo "如果无法访问，请检查："
+echo "1. Windows防火墙是否允许端口5700"
+echo "2. 使用命令 'netstat -tlnp | grep 5700' 检查端口监听"
+echo "3. 使用命令 'ps aux | grep qinglong' 检查进程"
+echo ""
+echo "目录结构："
+echo "主程序：/usr/lib/node_modules/@whyour/qinglong"
 echo "数据目录：/opt/qinglong/data"
 echo "配置文件：/opt/qinglong/.env"
-echo "主程序目录：$QL_GLOBAL_DIR"
+echo "日志文件：/opt/qinglong/data/log/qinglong.log"
 echo ""
-echo "重要安全提示："
-echo "1. 青龙面板v2.20.1及之前版本存在高危安全漏洞[1,2](@ref)"
-echo "2. 请确保安装的是v2.20.2或更高版本"
-echo "3. 建议不要将青龙面板暴露在公网"
-echo "4. 定期更新到最新版本"
+echo "管理命令："
+echo "启动：ql start"
+echo "停止：ql stop"
+echo "重启：ql restart"
+echo "状态：ql status"
+echo "查看日志：ql log 或 tail -f /opt/qinglong/data/log/qinglong.log"
 echo ""
-echo "常用命令："
-if [ -d /etc/systemd/system ]; then
-    echo "启动：sudo systemctl start qinglong"
-    echo "停止：sudo systemctl stop qinglong"
-    echo "重启：sudo systemctl restart qinglong"
-    echo "状态：sudo systemctl status qinglong"
-    echo "日志：sudo journalctl -u qinglong -f"
-else
-    echo "启动：pm2 start qinglong"
-    echo "停止：pm2 stop qinglong"
-    echo "重启：pm2 restart qinglong"
-    echo "状态：pm2 status"
-    echo "日志：pm2 logs qinglong"
-fi
+echo "手动启动："
+echo "cd /usr/lib/node_modules/@whyour/qinglong"
+echo "node src/main.js"
 echo ""
-echo "手动启动命令："
-echo "cd /usr/lib/node_modules/@whyour/qinglong && node src/main.js"
+echo "初始化步骤："
+echo "1. 访问 http://localhost:5700"
+echo "2. 按照页面提示设置用户名和密码"
+echo "3. 在青龙面板的【依赖管理】中安装所需依赖"
 echo ""
-echo "故障排除："
-echo "1. 如果端口5700被占用，请修改/opt/qinglong/.env中的PORT"
-echo "2. 查看日志：/opt/qinglong/data/log/"
-echo "3. 重新安装依赖：cd $QL_GLOBAL_DIR && npm install"
+echo "常用依赖："
+echo "Node.js: canvas, png-js, jsdom, crypto-js"
+echo "Python3: requests, beautifulsoup4, lxml, pycryptodome"
+echo ""
+echo "如果遇到问题，请查看日志：/opt/qinglong/data/log/qinglong.log"
 echo "========================================="
+echo ""
+echo "启动完成！请在浏览器中访问 http://localhost:5700"

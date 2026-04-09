@@ -11,23 +11,13 @@ echo -e "\033[32m  特性：全程自动确认（无需手动输y/回车）\033[
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
-# ===================== 前置：修复PATH环境变量（核心新增） =====================
+# ===================== 前置：修复PATH环境变量 + 强制刷新 =====================
 echo -e "\033[34m【前置优化】配置全局命令PATH环境变量...\033[0m"
-# 确保npm全局目录在PATH中（解决pnpm找不到的问题）
-NPM_GLOBAL_DIR="$HOME/.npm-global/bin"
-if ! echo "$PATH" | grep -q "$NPM_GLOBAL_DIR"; then
-    echo "添加npm全局目录到PATH..."
-    echo "export PATH=$NPM_GLOBAL_DIR:\$PATH" >> ~/.bashrc
-    export PATH="$NPM_GLOBAL_DIR:$PATH"  # 立即生效
-fi
-# 确保pnpm目录在PATH中
-PNPM_DIR="$HOME/.local/share/pnpm"
-if ! echo "$PATH" | grep -q "$PNPM_DIR"; then
-    echo "添加pnpm目录到PATH..."
-    echo "export PATH=$PNPM_DIR:\$PATH" >> ~/.bashrc
-    export PATH="$PNPM_DIR:$PATH"  # 立即生效
-fi
-source ~/.bashrc  # 刷新环境变量
+# 覆盖所有可能的全局目录
+export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# 写入bashrc确保永久生效
+echo "export PATH=$HOME/.npm-global/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH" >> ~/.bashrc
+source ~/.bashrc  # 强制刷新
 echo ""
 
 # ===================== 前置：全维度国内加速源配置 =====================
@@ -84,31 +74,31 @@ echo ""
 
 # ===================== 1. 安装Git（自动确认） =====================
 echo -e "\033[34m【步骤1/12】安装Git...\033[0m"
-sudo apt update -y  # -y 自动确认更新
-sudo apt install git -y  # -y 自动确认安装
+sudo apt update -y
+sudo apt install git -y
 echo ""
 
-# ===================== 2. 安装Node.js、npm、pnpm（修复pnpm安装） =====================
+# ===================== 2. 安装Node.js + 用corepack安装pnpm（核心修复） =====================
 echo -e "\033[34m【步骤2/12】安装Node.js 18.x、npm、pnpm 8.3.1...\033[0m"
-# 自动确认Node.js源添加（echo "" 模拟回车）
+# 自动确认Node.js源添加
 echo "" | curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install nodejs -y  # -y 自动确认安装
+sudo apt install nodejs -y
 
-# 强制刷新npm配置，确保全局目录生效
-npm config set prefix ~/.npm-global
+# 配置npm国内源
 npm config set registry https://registry.npmmirror.com/
 npm config set cache /tmp/npm-cache
 
-# 重新安装pnpm，指定全局目录（核心修复）
-echo "安装pnpm 8.3.1（指定全局目录）..."
-npm install -g pnpm@8.3.1 --prefix ~/.npm-global
+# ========== 关键：用corepack安装pnpm（官方方式，100%解决命令找不到） ==========
+echo "启用corepack并安装pnpm 8.3.1..."
+corepack enable  # 启用Node.js内置的包管理器管理工具
+corepack prepare pnpm@8.3.1 --activate  # 安装并激活指定版本pnpm
 
 # 验证pnpm是否安装成功
 if command -v pnpm &>/dev/null; then
     echo -e "\033[32mpnpm安装成功，版本：$(pnpm --version)\033[0m"
 else
-    echo -e "\033[31m警告：pnpm未识别，尝试手动链接...\033[0m"
-    sudo ln -s "$NPM_GLOBAL_DIR/pnpm" /usr/local/bin/pnpm
+    echo -e "\033[31m紧急修复：手动创建pnpm软链接...\033[0m"
+    sudo ln -s "$(which pnpm)" /usr/local/bin/pnpm
 fi
 
 # 配置pnpm国内源+缓存
@@ -119,13 +109,12 @@ echo ""
 # ===================== 3. 更新系统包列表（自动确认） =====================
 echo -e "\033[34m【步骤3/12】更新系统包列表并升级...\033[0m"
 sudo apt update -y
-sudo apt upgrade -y  # -y 自动确认所有升级
+sudo apt upgrade -y
 echo ""
 
 # ===================== 4. 添加Deadsnakes PPA（自动回车确认） =====================
 echo -e "\033[34m【步骤4/12】添加Deadsnakes PPA...\033[0m"
 sudo apt install software-properties-common -y
-# echo "" 模拟回车，自动确认PPA添加
 echo "" | sudo add-apt-repository ppa:deadsnakes/ppa
 sudo apt update -y
 echo ""
@@ -137,30 +126,29 @@ echo ""
 
 # ===================== 6. 安装Python 3.12及组件（自动确认） =====================
 echo -e "\033[34m【步骤6/12】安装Python 3.12...\033[0m"
-sudo apt install python3.12 -y  # -y 自动确认安装
+sudo apt install python3.12 -y
 echo ""
 
 echo -e "\033[34m【步骤7/12】安装Python 3.12 venv/dev组件...\033[0m"
-sudo apt install python3.12-venv python3.12-dev -y  # -y 自动确认安装
+sudo apt install python3.12-venv python3.12-dev -y
 echo ""
 
 # ===================== 7. 配置Python默认版本（自动选择3.12） =====================
 echo -e "\033[34m【步骤8/12】配置Python 3.12为默认版本...\033[0m"
 sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-# 自动选择Python 3.12（echo 1 模拟输入序号）
 echo "1" | sudo update-alternatives --config python3
 echo ""
 
 # ===================== 8. 安装pip并升级（自动确认） =====================
 echo -e "\033[34m【步骤9/12】安装pip...\033[0m"
-sudo apt install python3-pip -y  # -y 自动确认安装
+sudo apt install python3-pip -y
 echo ""
 
 echo -e "\033[34m【步骤10/12】升级pip到25.0.1（清华源加速）...\033[0m"
 python3 -m ensurepip --upgrade
 python3 -m pip install --upgrade pip==25.0.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 配置pip默认清华源（WSL优化）
+# 配置pip默认清华源
 echo -e "\033[34m配置pip默认清华源...\033[0m"
 mkdir -p ~/.pip
 tee ~/.pip/pip.conf > /dev/null <<EOF
@@ -185,26 +173,25 @@ echo ""
 
 # ===================== 10. 青龙面板部署（全程自动） =====================
 echo -e "\033[34m【步骤12/12】部署青龙面板...\033[0m"
-# 修复CA证书（自动确认）
+# 修复CA证书
 echo "修复系统CA证书..."
 sudo apt-get install --reinstall ca-certificates -y
 sudo update-ca-certificates --fresh
 
-# 升级Python网络依赖（清华源）
+# 升级Python网络依赖
 echo "升级Python网络依赖库..."
 pip install certifi urllib3 requests --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 初始化pnpm（自动确认+环境变量生效）
+# 初始化pnpm
 echo "初始化pnpm环境..."
-source ~/.bashrc  # 再次刷新环境变量
 yes | pnpm setup
 
-# 克隆青龙源码（gitproxy加速）
+# 克隆青龙源码
 echo "克隆青龙面板源码..."
 git clone https://github.com/whyour/qinglong.git
 
-# 进入项目目录
-cd qinglong || { echo -e "\033[31m进入青龙目录失败！\033[0m"; exit 1; }
+# 进入项目目录（容错）
+cd qinglong || { echo -e "\033[31m错误：青龙目录不存在！\033[0m"; exit 1; }
 
 # 复制环境变量
 echo "复制环境变量配置文件..."
@@ -214,11 +201,11 @@ cp .env.example .env
 echo "确认pnpm淘宝镜像源..."
 pnpm config set registry https://registry.npmmirror.com/
 
-# 安装系统依赖（自动确认）
+# 安装系统依赖
 echo "安装系统依赖..."
 sudo apt-get install python3 python-is-python3 build-essential libsqlite3-dev -y
 
-# 安装项目依赖（自动确认）
+# 安装项目依赖
 echo "安装青龙面板项目依赖..."
 pnpm install
 

@@ -54,7 +54,7 @@ EOF
 fi
 sudo apt clean && sudo apt update -y
 
-# 2.2 pip源配置（清华源+WSL缓存优化）
+# 2.2 pip源配置（清华源+WSL缓存优化）【仅配置文件，不执行pip命令】
 mkdir -p ~/.pip
 tee ~/.pip/pip.conf > /dev/null <<EOF
 [global]
@@ -67,12 +67,7 @@ cache-dir = /tmp/pip-cache  # WSL权限优化
 upgrade-strategy = only-if-needed
 EOF
 
-# 2.3 npm/pnpm源配置（淘宝源+WSL权限优化）
-npm config set registry https://registry.npmmirror.com/
-npm config set cache /tmp/npm-cache
-npm config set prefix ~/.npm-global  # 避免WSL权限冲突
-
-# 2.4 Git加速配置（ghproxy代理+WSL SSL优化）
+# 2.3 Git加速配置（ghproxy代理+WSL SSL优化）【无依赖，可提前配置】
 git config --global url."https://gitproxy.mrhjx.cn/https://github.com/".insteadOf "https://github.com/"
 git config --global url."https://gitproxy.mrhjx.cn/https://gist.github.com/".insteadOf "https://gist.github.com/"
 if [ "$WSL_FLAG" = "WSL" ]; then
@@ -85,11 +80,15 @@ echo -e "\033[34m【2/14】系统基础更新（加速版）...\033[0m"
 sudo apt upgrade -y
 
 echo -e "\033[34m【3/14】安装Git、系统依赖工具...\033[0m"
-sudo apt install git software-properties-common -y
+sudo apt install git software-properties-common curl -y  # 补充curl（Node.js安装依赖）
 
 echo -e "\033[34m【4/14】安装Node.js 18.x + pnpm 8.3.1...\033[0m"
 curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt install nodejs -y
+# 安装Node.js后，再配置npm/pnpm源（核心修复点）
+npm config set registry https://registry.npmmirror.com/
+npm config set cache /tmp/npm-cache
+npm config set prefix ~/.npm-global  # 避免WSL权限冲突
 npm install -g pnpm@8.3.1
 pnpm setup
 pnpm config set registry https://registry.npmmirror.com/  # 二次确认pnpm源

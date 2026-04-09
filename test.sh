@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # 青龙面板一键安装脚本 for WSL1 Ubuntu 20.04
-# 国内镜像加速版本
+# 修复npm配置问题版本
 # 日期：2026-04-09
 
 set -e
 
 echo "========================================="
-echo "青龙面板一键安装脚本（国内镜像加速版）"
+echo "青龙面板一键安装脚本（修复npm配置问题）"
 echo "========================================="
 
 # 检查是否为root用户
@@ -16,10 +16,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 0. 检查网络连接
-echo "步骤0/12：检查网络连接..."
-ping -c 1 mirrors.aliyun.com >/dev/null 2>&1 && echo "✓ 阿里云镜像源可达" || echo "⚠ 无法访问阿里云镜像源"
-ping -c 1 gitee.com >/dev/null 2>&1 && echo "✓ Gitee可达" || echo "⚠ 无法访问Gitee"
+# 0. 清理旧的npm配置
+echo "步骤0/12：清理旧的npm配置..."
+# 移除不兼容的npm配置项
+npm config delete disturl 2>/dev/null || true
+npm config delete sass_binary_site 2>/dev/null || true
+npm config delete phantomjs_cdnurl 2>/dev/null || true
+npm config delete chromedriver_cdnurl 2>/dev/null || true
+npm config delete operadriver_cdnurl 2>/dev/null || true
+npm config delete electron_mirror 2>/dev/null || true
+npm config delete fse_binary_host_mirror 2>/dev/null || true
+npm config delete node_sqlite3_binary_host_mirror 2>/dev/null || true
+npm config delete sqlite3_binary_host_mirror 2>/dev/null || true
+npm config delete sharp_binary_host 2>/dev/null || true
+npm config delete sharp_libvips_binary_host 2>/dev/null || true
+npm config delete canvas_binary_host_mirror 2>/dev/null || true
+npm config delete nodejieba_binary_host_mirror 2>/dev/null || true
 
 # 1. 备份并配置阿里云源
 echo "步骤1/12：配置阿里云软件源..."
@@ -50,12 +62,6 @@ apt install -y git wget curl vim net-tools build-essential ca-certificates \
 
 # 4. 配置Git使用国内镜像
 echo "步骤4/12：配置Git镜像加速..."
-
-# 配置Git全局代理（可选，如果网络环境需要）
-# git config --global http.proxy "http://your-proxy:port"
-# git config --global https.proxy "http://your-proxy:port"
-
-# 配置Git使用HTTPS替代SSH（避免SSH连接问题）
 git config --global url."https://".insteadOf git://
 git config --global url."https://github.com/".insteadOf git@github.com:
 
@@ -80,16 +86,11 @@ apt install -y python3 python3-pip python3-venv python3-dev
 python3 --version
 pip3 --version
 
-# 7. 配置国内镜像源
+# 7. 配置国内镜像源（仅保留有效的配置）
 echo "步骤7/12：配置国内镜像源..."
 
-# 配置npm使用淘宝镜像
+# 只配置registry，这是唯一必须且有效的配置
 npm config set registry https://registry.npmmirror.com/
-npm config set disturl https://npmmirror.com/dist
-npm config set electron_mirror https://npmmirror.com/mirrors/electron/
-npm config set sass_binary_site https://npmmirror.com/mirrors/node-sass/
-npm config set phantomjs_cdnurl https://npmmirror.com/mirrors/phantomjs/
-npm config set chromedriver_cdnurl https://npmmirror.com/mirrors/chromedriver/
 
 # 配置pip使用清华镜像
 pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
@@ -102,7 +103,7 @@ echo "步骤8/12：安装pnpm..."
 npm install -g pnpm@8.3.1
 echo "pnpm版本: $(pnpm --version)"
 
-# 9. 安装青龙面板（使用国内镜像）
+# 9. 安装青龙面板
 echo "步骤9/12：安装青龙面板..."
 
 # 创建安装目录
@@ -117,41 +118,25 @@ fi
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-echo "尝试从国内镜像安装青龙面板..."
-
-# 方法1：尝试从Gitee克隆（国内镜像）
-echo "方法1：从Gitee镜像克隆..."
+echo "从Gitee镜像克隆青龙面板..."
+# 使用Gitee镜像（国内访问更快）
 if git clone https://gitee.com/whyour/qinglong.git .; then
     echo "✓ 从Gitee克隆成功！"
     MIRROR_SOURCE="gitee"
 else
-    echo "Gitee克隆失败，尝试GitHub代理..."
-    
-    # 方法2：使用GitHub代理服务
-    echo "方法2：使用GitHub代理服务..."
-    if git clone https://githubproxy.cc/https://github.com/whyour/qinglong.git .; then
-        echo "✓ 通过GitHub代理克隆成功！"
-        MIRROR_SOURCE="githubproxy"
+    echo "Gitee克隆失败，尝试从GitHub克隆..."
+    if git clone https://github.com/whyour/qinglong.git .; then
+        echo "✓ 从GitHub克隆成功！"
+        MIRROR_SOURCE="github"
     else
-        echo "GitHub代理失败，尝试原始GitHub..."
-        
-        # 方法3：原始GitHub（最后尝试）
-        echo "方法3：从原始GitHub克隆..."
-        if git clone https://github.com/whyour/qinglong.git .; then
-            echo "✓ 从GitHub克隆成功！"
-            MIRROR_SOURCE="github"
-        else
-            echo "✗ 所有克隆方法都失败！"
-            echo "请检查网络连接或尝试以下方法："
-            echo "1. 配置系统代理：export http_proxy=http://your-proxy:port"
-            echo "2. 使用VPN连接"
-            echo "3. 手动下载ZIP包：https://github.com/whyour/qinglong/archive/refs/heads/master.zip"
-            exit 1
-        fi
+        echo "✗ 克隆失败！"
+        echo "请检查网络连接或尝试以下方法："
+        echo "1. 手动下载: wget https://github.com/whyour/qinglong/archive/refs/heads/master.zip"
+        echo "2. 解压: unzip master.zip"
+        echo "3. 移动: mv qinglong-master $INSTALL_DIR"
+        exit 1
     fi
 fi
-
-echo "安装源: $MIRROR_SOURCE"
 
 # 检查当前版本
 if [ -f "version.yaml" ]; then
@@ -164,7 +149,6 @@ echo "步骤10/12：安装依赖..."
 
 # 设置环境变量使用国内镜像
 export MIRROR="gitee"
-export NPM_CONFIG_REGISTRY="https://registry.npmmirror.com"
 
 echo "使用pnpm安装依赖..."
 if pnpm install; then
@@ -203,8 +187,9 @@ if [ -f ".env.example" ]; then
     echo "✓ 已创建.env配置文件"
     
     # 更新.env文件中的镜像配置
-    sed -i 's/^MIRROR=.*/MIRROR=gitee/' .env 2>/dev/null || true
-    echo "MIRROR=gitee" >> .env
+    if ! grep -q "^MIRROR=" .env; then
+        echo "MIRROR=gitee" >> .env
+    fi
 fi
 
 # 创建启动脚本
@@ -215,14 +200,12 @@ QL_DATA_DIR="$QL_DIR/data"
 
 # 设置国内镜像环境变量
 export MIRROR="gitee"
-export NPM_CONFIG_REGISTRY="https://registry.npmmirror.com"
-export PYTHONIOENCODING="utf-8"
 export TZ="Asia/Shanghai"
 export PORT=5700
 
 case "$1" in
     start)
-        echo "启动青龙面板（使用国内镜像）..."
+        echo "启动青龙面板..."
         cd "$QL_DIR"
         nohup node src/main.js > "$QL_DATA_DIR/log/qinglong.log" 2>&1 &
         QL_PID=$!
@@ -255,7 +238,11 @@ case "$1" in
         fi
         ;;
     log)
-        tail -f "$QL_DATA_DIR/log/qinglong.log"
+        if [ -f "$QL_DATA_DIR/log/qinglong.log" ]; then
+            tail -f "$QL_DATA_DIR/log/qinglong.log"
+        else
+            echo "日志文件不存在: $QL_DATA_DIR/log/qinglong.log"
+        fi
         ;;
     update)
         echo "更新青龙面板..."
@@ -264,15 +251,9 @@ case "$1" in
         pnpm install
         $0 restart
         ;;
-    mirror)
-        echo "当前镜像源: $MIRROR"
-        echo "切换镜像源:"
-        echo "  export MIRROR=gitee    # 使用Gitee镜像"
-        echo "  export MIRROR=github   # 使用GitHub"
-        ;;
     *)
-        echo "青龙面板管理工具（国内镜像优化版）"
-        echo "用法: ql {start|stop|restart|status|log|update|mirror}"
+        echo "青龙面板管理工具"
+        echo "用法: ql {start|stop|restart|status|log|update}"
         echo ""
         echo "命令说明:"
         echo "  start    - 启动青龙面板"
@@ -281,14 +262,9 @@ case "$1" in
         echo "  status   - 查看运行状态"
         echo "  log      - 查看实时日志"
         echo "  update   - 更新青龙面板"
-        echo "  mirror   - 查看镜像源设置"
         echo ""
         echo "手动启动:"
         echo "  cd /opt/qinglong && node src/main.js"
-        echo ""
-        echo "环境变量:"
-        echo "  MIRROR=gitee           # 使用国内镜像"
-        echo "  NPM_CONFIG_REGISTRY    # npm镜像源"
         exit 1
         ;;
 esac
@@ -305,7 +281,7 @@ echo "青龙面板安装完成！"
 echo "========================================="
 echo ""
 echo "安装摘要："
-echo "1. 系统工具: 已安装"
+echo "1. 已清理旧的npm配置"
 echo "2. Node.js 20.x: 已安装"
 echo "3. Python3: 已安装"
 echo "4. pnpm 8.3.1: 已安装（官方推荐版本）"
@@ -325,7 +301,6 @@ echo "重启: ql restart"
 echo "状态: ql status"
 echo "日志: ql log"
 echo "更新: ql update"
-echo "镜像源: ql mirror"
 echo ""
 echo "初始化步骤："
 echo "1. 启动青龙面板: ql start"
@@ -333,14 +308,8 @@ echo "2. 访问 http://localhost:5700"
 echo "3. 按照页面提示完成初始化"
 echo "4. 在青龙面板的【依赖管理】中安装所需依赖"
 echo ""
-echo "网络优化："
-echo "✓ 已配置阿里云软件源"
-echo "✓ 已配置npm淘宝镜像"
-echo "✓ 已配置pip清华镜像"
-echo "✓ 青龙面板使用国内镜像源"
-echo ""
-echo "如果仍有网络问题，可以尝试："
-echo "1. 配置系统代理: export http_proxy=http://your-proxy:port"
-echo "2. 使用加速服务: git config --global url.\"https://githubproxy.cc/\".insteadOf https://github.com/"
-echo "3. 手动下载: wget https://github.com/whyour/qinglong/archive/refs/heads/master.zip"
+echo "常见问题解决："
+echo "1. 如果端口5700被占用，请修改/opt/qinglong/.env中的PORT"
+echo "2. 如果启动失败，查看日志: ql log"
+echo "3. 如果需要重新安装，先删除目录: rm -rf /opt/qinglong"
 echo "========================================="

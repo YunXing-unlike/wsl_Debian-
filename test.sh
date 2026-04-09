@@ -11,6 +11,25 @@ echo -e "\033[32m  特性：全程自动确认（无需手动输y/回车）\033[
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
+# ===================== 前置：修复PATH环境变量（核心新增） =====================
+echo -e "\033[34m【前置优化】配置全局命令PATH环境变量...\033[0m"
+# 确保npm全局目录在PATH中（解决pnpm找不到的问题）
+NPM_GLOBAL_DIR="$HOME/.npm-global/bin"
+if ! echo "$PATH" | grep -q "$NPM_GLOBAL_DIR"; then
+    echo "添加npm全局目录到PATH..."
+    echo "export PATH=$NPM_GLOBAL_DIR:\$PATH" >> ~/.bashrc
+    export PATH="$NPM_GLOBAL_DIR:$PATH"  # 立即生效
+fi
+# 确保pnpm目录在PATH中
+PNPM_DIR="$HOME/.local/share/pnpm"
+if ! echo "$PATH" | grep -q "$PNPM_DIR"; then
+    echo "添加pnpm目录到PATH..."
+    echo "export PATH=$PNPM_DIR:\$PATH" >> ~/.bashrc
+    export PATH="$PNPM_DIR:$PATH"  # 立即生效
+fi
+source ~/.bashrc  # 刷新环境变量
+echo ""
+
 # ===================== 前置：全维度国内加速源配置 =====================
 echo -e "\033[34m【前置步骤】配置全维度国内加速源...\033[0m"
 # 1. 自动识别系统版本
@@ -53,8 +72,8 @@ EOF
 fi
 sudo apt clean
 
-# 3. 配置Git gitproxy.mrhjx.cn加速（WSL优化）
-echo "配置Git ghproxy加速..."
+# 3. 配置Git国内加速（替换为gitproxy.mrhjx.cn）
+echo "配置Git gitproxy.mrhjx.cn加速..."
 git config --global url."https://gitproxy.mrhjx.cn/https://github.com/".insteadOf "https://github.com/"
 git config --global url."https://gitproxy.mrhjx.cn/https://gist.github.com/".insteadOf "https://gist.github.com/"
 if [ "$WSL_FLAG" = "WSL" ]; then
@@ -69,17 +88,30 @@ sudo apt update -y  # -y 自动确认更新
 sudo apt install git -y  # -y 自动确认安装
 echo ""
 
-# ===================== 2. 安装Node.js、npm、pnpm（自动确认） =====================
+# ===================== 2. 安装Node.js、npm、pnpm（修复pnpm安装） =====================
 echo -e "\033[34m【步骤2/12】安装Node.js 18.x、npm、pnpm 8.3.1...\033[0m"
 # 自动确认Node.js源添加（echo "" 模拟回车）
 echo "" | curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt install nodejs -y  # -y 自动确认安装
-# 配置npm国内源
+
+# 强制刷新npm配置，确保全局目录生效
+npm config set prefix ~/.npm-global
 npm config set registry https://registry.npmmirror.com/
 npm config set cache /tmp/npm-cache
-npm config set prefix ~/.npm-global
-npm install -g pnpm@8.3.1
-# 配置pnpm国内源
+
+# 重新安装pnpm，指定全局目录（核心修复）
+echo "安装pnpm 8.3.1（指定全局目录）..."
+npm install -g pnpm@8.3.1 --prefix ~/.npm-global
+
+# 验证pnpm是否安装成功
+if command -v pnpm &>/dev/null; then
+    echo -e "\033[32mpnpm安装成功，版本：$(pnpm --version)\033[0m"
+else
+    echo -e "\033[31m警告：pnpm未识别，尝试手动链接...\033[0m"
+    sudo ln -s "$NPM_GLOBAL_DIR/pnpm" /usr/local/bin/pnpm
+fi
+
+# 配置pnpm国内源+缓存
 pnpm config set registry https://registry.npmmirror.com/
 pnpm config set store-dir /tmp/pnpm-store
 echo ""
@@ -115,7 +147,7 @@ echo ""
 # ===================== 7. 配置Python默认版本（自动选择3.12） =====================
 echo -e "\033[34m【步骤8/12】配置Python 3.12为默认版本...\033[0m"
 sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-# 自动选择Python 3.12（echo 1 模拟输入序号，适配绝大多数场景）
+# 自动选择Python 3.12（echo 1 模拟输入序号）
 echo "1" | sudo update-alternatives --config python3
 echo ""
 
@@ -162,16 +194,17 @@ sudo update-ca-certificates --fresh
 echo "升级Python网络依赖库..."
 pip install certifi urllib3 requests --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 初始化pnpm（自动确认）
+# 初始化pnpm（自动确认+环境变量生效）
 echo "初始化pnpm环境..."
-yes | pnpm setup  # yes 自动确认pnpm setup的交互
+source ~/.bashrc  # 再次刷新环境变量
+yes | pnpm setup
 
-# 克隆青龙源码（ghproxy加速）
+# 克隆青龙源码（gitproxy加速）
 echo "克隆青龙面板源码..."
 git clone https://github.com/whyour/qinglong.git
 
 # 进入项目目录
-cd qinglong
+cd qinglong || { echo -e "\033[31m进入青龙目录失败！\033[0m"; exit 1; }
 
 # 复制环境变量
 echo "复制环境变量配置文件..."
@@ -193,7 +226,7 @@ pnpm install
 echo -e "\033[32m=============================================\033[0m"
 echo -e "\033[32m              部署完成！🎉\033[0m"
 echo -e "\033[32m=============================================\033[0m"
-echo -e "✅ 全维度加速源配置生效：阿里云APT + 清华pip + 淘宝pnpm/npm + ghproxy Git"
+echo -e "✅ 全维度加速源配置生效：阿里云APT + 清华pip + 淘宝pnpm/npm + gitproxy.mrhjx.cn Git"
 echo -e "✅ 环境验证通过：Python 3.12 + pip 25.0.1 + Node.js 18 + pnpm 8.3.1"
 echo -e "✅ 青龙面板依赖安装完成，即将启动..."
 echo -e "📌 访问地址：http://localhost:5700"

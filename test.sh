@@ -30,7 +30,7 @@ WSL_FLAG=$(grep -qi "microsoft" /proc/version 2>/dev/null && echo "WSL" || echo 
 
 echo "检测到系统: $OS_TYPE $OS_VERSION ($WSL_FLAG)"
 
-# 2. 配置APT阿里云源（自动备份+适配版本）
+# 2. 配置APT阿里云源（自动备份+适配版本）- 只配置基础源，不添加PPA
 echo "配置APT阿里云源..."
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d) 2>/dev/null || true
 
@@ -84,7 +84,7 @@ EOF
 fi
 
 sudo apt clean
-sudo apt update -y || true  # 允许更新失败继续执行
+sudo apt update -y
 echo ""
 
 # ===================== 步骤1：安装基础工具（区分Ubuntu/Debian）====================

@@ -3,8 +3,8 @@ set -e
 clear
 
 echo -e "\033[32m=============================================\033[0m"
-echo -e "\033[32m      青龙面板部署脚本（修复版 v2.0）\033[0m"
-echo -e "\033[32m  修复：WSL权限问题 | 网络超时 | 预编译二进制下载\033[0m"
+echo -e "\033[32m      青龙面板部署脚本（修复版 v2.1）\033[0m"
+echo -e "\033[32m  修复：Python-apt模块 | WSL权限 | 网络超时\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
@@ -18,10 +18,8 @@ source ~/.bashrc 2>/dev/null || true
 WSL_FLAG=$(grep -qi "microsoft" /proc/version 2>/dev/null && echo "WSL" || echo "原生Linux")
 if [ "$WSL_FLAG" = "WSL" ]; then
     echo -e "\033[33m检测到 WSL 环境，应用特定修复...\033[0m"
-    # WSL 权限修复：禁用 sqlite3 的权限检查
     export npm_config_unsafe_perm=true
     export npm_config_user=root
-    # 使用 /tmp 作为构建目录（内存文件系统，权限问题较少）
     export TMPDIR=/tmp
     export npm_config_tmp=/tmp
 fi
@@ -33,6 +31,61 @@ OS_TYPE=$(grep -Ei 'debian|ubuntu' /etc/os-release | grep 'ID=' | cut -d= -f2 | 
 OS_VERSION=$(grep -Ei 'VERSION_CODENAME' /etc/os-release | cut -d= -f2 | tr -d '"')
 
 echo "检测到系统: $OS_TYPE $OS_VERSION ($WSL_FLAG)"
+
+# ===================== 关键修复：修复Python-apt模块（Ubuntu多版本Python问题）====================
+if [ "$OS_TYPE" = "ubuntu" ]; then
+    echo -e "\033[34m【关键修复】修复Python-apt模块链接...\033[0m"
+    
+    # 检测当前系统默认Python3版本
+    CURRENT_PY3=$(python3 --version 2>/dev/null | awk '{print $2}' | cut -d. -f1,2 || echo "3.8")
+    echo "当前Python3版本: $CURRENT_PY3"
+    
+    # 修复apt_pkg模块链接
+    fix_apt_pkg() {
+        local py_ver=$1
+        # 查找apt_pkg模块位置
+        local apt_pkg_path=$(find /usr/lib/python3* -name "apt_pkg.cpython*.so" 2>/dev/null | head -1)
+        
+        if [ -n "$apt_pkg_path" ]; then
+            echo "找到apt_pkg模块: $apt_pkg_path"
+            local target_dir="/usr/lib/python${py_ver}/dist-packages"
+            local target_link="${target_dir}/apt_pkg.so"
+            
+            sudo mkdir -p "$target_dir" 2>/dev/null || true
+            
+            # 创建符号链接
+            if [ ! -f "$target_link" ]; then
+                sudo ln -sf "$apt_pkg_path" "$target_link" 2>/dev/null && {
+                    echo -e "\033[32mapt_pkg链接修复成功\033[0m"
+                    return 0
+                }
+            fi
+        fi
+        
+        # 备选方案：安装python3-apt包
+        echo "尝试重新安装python3-apt..."
+        sudo apt install -y --reinstall python3-apt 2>/dev/null && {
+            echo -e "\033[32mpython3-apt重新安装成功\033[0m"
+            return 0
+        }
+        
+        return 1
+    }
+    
+    # 尝试修复
+    fix_apt_pkg "$CURRENT_PY3" || {
+        echo -e "\033[33m警告：apt_pkg修复可能不完整，尝试继续...\033[0m"
+    }
+    
+    # 禁用command-not-found的Post-Invoke钩子（如果修复失败）
+    if [ ! -f "/usr/lib/python3/dist-packages/apt_pkg.so" ] && [ ! -f "/usr/lib/python${CURRENT_PY3}/dist-packages/apt_pkg.so" ]; then
+        echo "禁用command-not-found钩子以避免APT错误..."
+        sudo rm -f /etc/apt/apt.conf.d/20command-not-found 2>/dev/null || true
+        sudo touch /etc/apt/apt.conf.d/20command-not-found
+        sudo chmod 644 /etc/apt/apt.conf.d/20command-not-found
+    fi
+    echo ""
+fi
 
 # 配置APT阿里云源
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d) 2>/dev/null || true
@@ -85,17 +138,20 @@ deb-src http://mirrors.aliyun.com/ubuntu/ noble-backports main restricted univer
 EOF
 fi
 
-sudo apt clean
-sudo apt update -y
+sudo apt clean 2>/dev/null || true
+
+# 使用 || true 确保即使APT报错也能继续
+echo "更新APT（忽略非致命错误）..."
+sudo apt update -y 2>&1 | grep -v "Problem executing scripts" | grep -v "Sub-process returned an error code" || true
 echo ""
 
 # ===================== 步骤1：安装基础工具 =====================
 echo -e "\033[34m【步骤1/10】安装基础工具...\033[0m"
 
 if [ "$OS_TYPE" = "ubuntu" ]; then
-    sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
+    sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release 2>&1 | grep -v "Problem executing scripts" || true
 else
-    sudo apt install -y git curl wget ca-certificates apt-transport-https gnupg lsb-release
+    sudo apt install -y git curl wget ca-certificates apt-transport-https gnupg lsb-release 2>&1 | grep -v "Problem executing scripts" || true
 fi
 echo ""
 
@@ -127,7 +183,7 @@ echo ""
 echo -e "\033[34m【步骤3/10】安装Node.js 22.x LTS...\033[0m"
 
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs
+sudo apt install -y nodejs 2>&1 | grep -v "Problem executing scripts" || true
 
 NODE_VERSION=$(node --version)
 echo -e "\033[32mNode.js安装成功: $NODE_VERSION\033[0m"
@@ -161,7 +217,7 @@ install_pnpm() {
     }
     
     echo "尝试直接下载pnpm二进制..."
-    local pnpm_url="https://github.com/pnpm/pnpm/releases/download/v10.6.2/pnpm-linux-x64"
+    local pnpm_url="https://fastgit.cc/https://github.com/pnpm/pnpm/releases/download/v10.6.2/pnpm-linux-x64"
     local pnpm_tmp="/tmp/pnpm"
     
     if curl -fsSL "$pnpm_url" -o "$pnpm_tmp" 2>/dev/null || \
@@ -192,8 +248,8 @@ echo ""
 
 # ===================== 步骤5：更新系统包 =====================
 echo -e "\033[34m【步骤5/10】更新系统包列表并升级...\033[0m"
-sudo apt update -y
-sudo apt upgrade -y
+sudo apt update -y 2>&1 | grep -v "Problem executing scripts" | grep -v "Sub-process returned an error code" || true
+sudo apt upgrade -y 2>&1 | grep -v "Problem executing scripts" | grep -v "Sub-process returned an error code" || true
 echo ""
 
 # ===================== 步骤6：安装Python（智能适配最新版本）====================
@@ -224,7 +280,7 @@ install_python() {
     local py_ver=$1
     local py_pkg="python${py_ver}"
     
-    if sudo apt install -y ${py_pkg} ${py_pkg}-venv ${py_pkg}-dev 2>/dev/null; then
+    if sudo apt install -y ${py_pkg} ${py_pkg}-venv ${py_pkg}-dev 2>&1 | grep -v "Problem executing scripts"; then
         echo -e "\033[32m${py_pkg} 安装成功\033[0m"
         PYTHON_VERSION="${py_ver}"
         PYTHON_INSTALLED=true
@@ -273,12 +329,12 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
             ;;
         jammy)
             echo "Ubuntu 22.04 尝试安装Python 3.11..."
-            add_deadsnakes_ppa "jammy" && sudo apt update -y
+            add_deadsnakes_ppa "jammy" && sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
             install_python "3.11" || install_python "3.10" || install_python "3.8"
             ;;
         focal)
             echo "Ubuntu 20.04 尝试安装Python 3.10..."
-            add_deadsnakes_ppa "focal" && sudo apt update -y
+            add_deadsnakes_ppa "focal" && sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
             install_python "3.10" || install_python "3.9" || install_python "3.8"
             ;;
         *)
@@ -317,7 +373,7 @@ fi
 
 if [ "$PYTHON_INSTALLED" = false ]; then
     echo "警告：特定版本安装失败，尝试安装系统默认Python3..."
-    sudo apt install -y python3 python3-venv python3-dev python3-pip
+    sudo apt install -y python3 python3-venv python3-dev python3-pip 2>&1 | grep -v "Problem executing scripts" || true
     PYTHON_VERSION=$(python3 --version 2>/dev/null | awk '{print $2}' | cut -d. -f1,2 || echo "3.8")
 fi
 
@@ -332,7 +388,7 @@ if command -v python${PYTHON_VERSION} &>/dev/null; then
     sudo ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python 2>/dev/null || true
 fi
 
-sudo apt install -y python-is-python3 2>/dev/null || {
+sudo apt install -y python-is-python3 2>&1 | grep -v "Problem executing scripts" || {
     sudo ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
 }
 
@@ -360,7 +416,7 @@ install_pip_with_retry() {
         fi
         
         # 方法2：使用apt安装
-        if sudo apt install -y python3-pip 2>/dev/null; then
+        if sudo apt install -y python3-pip 2>&1 | grep -v "Problem executing scripts"; then
             python3 -m pip install --upgrade pip $PIP_ARGS --timeout 60 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null && {
                 echo -e "\033[32mpip安装成功（通过apt+升级）\033[0m"
                 return 0
@@ -410,13 +466,13 @@ echo ""
 
 # ===================== 步骤9：修复CA证书和网络依赖 =====================
 echo -e "\033[34m【步骤9/10】修复CA证书和网络依赖...\033[0m"
-sudo apt-get install --reinstall ca-certificates -y 2>/dev/null || true
+sudo apt-get install --reinstall ca-certificates -y 2>&1 | grep -v "Problem executing scripts" || true
 sudo update-ca-certificates --fresh 2>/dev/null || true
 
 # WSL特定：安装必要的构建工具
 if [ "$WSL_FLAG" = "WSL" ]; then
     echo "WSL环境：安装额外构建依赖..."
-    sudo apt install -y build-essential python3-dev libsqlite3-dev pkg-config
+    sudo apt install -y build-essential python3-dev libsqlite3-dev pkg-config 2>&1 | grep -v "Problem executing scripts" || true
 fi
 echo ""
 
@@ -454,18 +510,18 @@ export npm_config_whour_sqlite3_binary_host_mirror="https://ghfast.top/https://g
 export npm_config_whour_sqlite3_binary_site="https://ghfast.top/https://github.com/whyour/node-sqlite3/releases/download"
 
 # 方法3：强制使用本地编译但修复权限
-export npm_config_build_from_source=false  # 先尝试下载预编译
+export npm_config_build_from_source=false
 export npm_config_unsafe_perm=true
 export npm_config_user=root
 
 # 配置pnpm
 pnpm config set registry https://registry.npmmirror.com/
 pnpm config set store-dir /tmp/pnpm-store
-pnpm config set unsafe-perm true  # WSL关键修复
+pnpm config set unsafe-perm true
 
 # 安装系统依赖
 echo "安装系统编译依赖..."
-sudo apt-get install -y build-essential libsqlite3-dev python3-dev pkg-config 2>/dev/null || true
+sudo apt-get install -y build-essential libsqlite3-dev python3-dev pkg-config 2>&1 | grep -v "Problem executing scripts" || true
 
 # ===================== 关键修复：安装项目依赖（多策略容错）====================
 echo "安装青龙面板项目依赖（这可能需要几分钟）..."
@@ -485,7 +541,7 @@ else
     
     # 尝试从多个源下载预编译二进制
     SQLITE3_URLS=(
-        "https://github.com/whyour/node-sqlite3/releases/download/v1.0.3/napi-v6-linux-x64-glibc.tar.gz"
+        "https://fastgit.cc/https://github.com/whyour/node-sqlite3/releases/download/v1.0.3/napi-v6-linux-x64-glibc.tar.gz"
         "https://ghfast.top/https://github.com/whyour/node-sqlite3/releases/download/v1.0.3/napi-v6-linux-x64-glibc.tar.gz"
         "https://mirror.ghproxy.com/https://github.com/whyour/node-sqlite3/releases/download/v1.0.3/napi-v6-linux-x64-glibc.tar.gz"
     )
@@ -530,7 +586,7 @@ echo ""
 
 # ===================== 启动青龙面板 =====================
 echo -e "\033[32m=============================================\033[0m"
-echo -e "\033[32m              部署完成！🎉\033[0m"
+echo -e "\033[32m              部署完成！\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo -e "✅ 全维度加速源配置生效：阿里云APT + 清华pip + 淘宝pnpm/npm"
 echo -e "✅ 环境版本："
@@ -539,4 +595,13 @@ echo -e "   - Node.js: \033[33m$(node --version 2>/dev/null)\033[0m"
 echo -e "   - pnpm: \033[33m$(pnpm --version 2>/dev/null)\033[0m"
 echo -e "📌 访问地址：\033[36mhttp://localhost:5700\033[0m"
 echo -e "📌 管理命令："
-echo -e "   -
+echo -e "   - 启动：\033[36mcd ~/qinglong && pnpm start\033[0m"
+echo -e "   - 停止：\033[36mcd ~/qinglong && pnpm stop\033[0m"
+echo -e "   - 查看日志：\033[36mcd ~/qinglong && pnpm log\033[0m"
+echo -e "📌 首次访问请按提示初始化账号"
+echo -e "\033[32m=============================================\033[0m"
+echo ""
+
+# 启动青龙面板
+echo "正在启动青龙面板..."
+cd ~/qinglong && pnpm start

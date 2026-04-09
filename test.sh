@@ -145,31 +145,62 @@ npm config set registry https://registry.npmmirror.com/
 npm config set cache /tmp/npm-cache --global
 echo ""
 
-# ===================== 步骤4：安装pnpm 10.x =====================
+# ===================== 步骤4：安装pnpm 10.x（多方案容错）====================
 echo -e "\033[34m【步骤4/10】安装pnpm 10.x...\033[0m"
 
-# 使用官方安装脚本（国内镜像）
-curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.6.2 sh -
+install_pnpm() {
+    # 方案1：使用npm全局安装（最可靠）
+    if command -v npm &>/dev/null; then
+        echo "尝试使用npm安装pnpm..."
+        sudo npm install -g pnpm@10.6.2 && {
+            echo -e "\033[32mpnpm通过npm安装成功: $(pnpm --version)\033[0m"
+            return 0
+        }
+    fi
+    
+    # 方案2：官方安装脚本（备用）
+    echo "尝试使用官方脚本安装pnpm..."
+    curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.6.2 sh - && {
+        export PNPM_HOME="$HOME/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        echo 'export PNPM_HOME="$HOME/.local/share/pnpm"' >> ~/.bashrc
+        echo 'export PATH="$PNPM_HOME:$PATH"' >> ~/.bashrc
+        source ~/.bashrc 2>/dev/null || true
+        echo -e "\033[32mpnpm通过官方脚本安装成功: $(pnpm --version)\033[0m"
+        return 0
+    }
+    
+    # 方案3：直接下载二进制（最后手段）
+    echo "尝试直接下载pnpm二进制..."
+    local pnpm_url="https://github.com/pnpm/pnpm/releases/download/v10.6.2/pnpm-linux-x64"
+    local pnpm_tmp="/tmp/pnpm"
+    
+    if curl -fsSL "$pnpm_url" -o "$pnpm_tmp" 2>/dev/null || \
+       curl -fsSL "https://ghfast.top/$pnpm_url" -o "$pnpm_tmp" 2>/dev/null || \
+       curl -fsSL "https://mirror.ghproxy.com/$pnpm_url" -o "$pnpm_tmp" 2>/dev/null; then
+        chmod +x "$pnpm_tmp"
+        sudo mv "$pnpm_tmp" /usr/local/bin/pnpm
+        echo -e "\033[32mpnpm通过二进制下载安装成功: $(pnpm --version)\033[0m"
+        return 0
+    fi
+    
+    return 1
+}
 
-# 加载pnpm
-export PNPM_HOME="$HOME/.local/share/pnpm"
-export PATH="$PNPM_HOME:$PATH"
-echo 'export PNPM_HOME="$HOME/.local/share/pnpm"' >> ~/.bashrc
-echo 'export PATH="$PNPM_HOME:$PATH"' >> ~/.bashrc
-
-# 验证安装
-if command -v pnpm &>/dev/null; then
-    echo -e "\033[32mpnpm安装成功: $(pnpm --version)\033[0m"
+# 执行安装
+if install_pnpm; then
+    :
 else
-    # 备用方案：使用npm安装pnpm
-    echo "使用npm安装pnpm..."
-    sudo npm install -g pnpm@10.6.2
-    echo -e "\033[32mpnpm安装成功: $(pnpm --version)\033[0m"
+    echo -e "\033[31m所有pnpm安装方案均失败，尝试安装pnpm 9.x作为最后回退...\033[0m"
+    sudo npm install -g pnpm@9.15.0 || {
+        echo -e "\033[31m错误：无法安装pnpm，脚本终止\033[0m"
+        exit 1
+    }
 fi
 
 # 配置pnpm国内源
-pnpm config set registry https://registry.npmmirror.com/
-pnpm config set store-dir /tmp/pnpm-store
+pnpm config set registry https://registry.npmmirror.com/ 2>/dev/null || true
+pnpm config set store-dir /tmp/pnpm-store 2>/dev/null || true
 echo ""
 
 # ===================== 步骤5：更新系统包 =====================

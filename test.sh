@@ -1,16 +1,16 @@
 #!/bin/bash
 
-# 青龙面板WSL1 Ubuntu 20.04一键安装脚本（无systemd版）
+# 青龙面板WSL1 Ubuntu 20.04一键安装脚本（修正版）
+# 解决React版本冲突问题
 # 作者：元宝
 # 日期：2026-04-10
-# 说明：适用于WSL1环境，无systemd依赖，使用SQLite数据库
 
 set -e
 
 echo "=========================================="
 echo "  青龙面板WSL1 Ubuntu 20.04一键安装脚本   "
 echo "=========================================="
-echo "注意：本脚本专为WSL1设计，无systemd依赖"
+echo "注意：本脚本专为WSL1设计，解决依赖冲突问题"
 echo "=========================================="
 
 # 1. 配置国内源（阿里云源）
@@ -28,15 +28,25 @@ sudo apt upgrade -y
 echo "步骤3/12：安装基础工具..."
 sudo apt install -y curl wget git vim htop net-tools build-essential
 
-# 4. 安装Node.js 20.x（最新LTS版本）
-echo "步骤4/12：安装Node.js 20.x..."
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
+# 4. 安装nvm（Node版本管理器）
+echo "步骤4/12：安装nvm（Node版本管理器）..."
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+# 加载nvm
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
+# 5. 安装Node.js 16.x（青龙面板兼容版本）
+echo "步骤5/12：安装Node.js 16.x（青龙面板兼容版本）..."
+nvm install 16.20.2
+nvm use 16.20.2
+nvm alias default 16.20.2
 echo "Node.js版本: $(node --version)"
 echo "npm版本: $(npm --version)"
 
-# 5. 安装Python3及相关工具
-echo "步骤5/12：安装Python3及相关工具..."
+# 6. 安装Python3及相关工具
+echo "步骤6/12：安装Python3及相关工具..."
 sudo apt install -y python3 python3-pip python3-venv python3-dev
 echo "Python3版本: $(python3 --version)"
 
@@ -48,16 +58,16 @@ index-url = https://pypi.tuna.tsinghua.edu.cn/simple
 trusted-host = pypi.tuna.tsinghua.edu.cn
 EOF
 
-# 6. 安装SQLite3（青龙面板默认数据库）
-echo "步骤6/12：安装SQLite3数据库..."
+# 7. 安装SQLite3
+echo "步骤7/12：安装SQLite3数据库..."
 sudo apt install -y sqlite3 libsqlite3-dev
 sqlite3 --version
 
-# 7. 安装Redis（编译安装，避免systemd依赖）
-echo "步骤7/12：安装Redis（编译安装）..."
+# 8. 安装Redis
+echo "步骤8/12：安装Redis（编译安装）..."
 sudo apt install -y build-essential tcl
 
-# 下载最新稳定版Redis
+# 下载Redis
 REDIS_VERSION="7.2.4"
 cd /tmp
 wget https://download.redis.io/releases/redis-${REDIS_VERSION}.tar.gz
@@ -66,54 +76,69 @@ cd redis-${REDIS_VERSION}
 make -j$(nproc)
 sudo make install
 
-# 创建Redis配置目录
+# 配置Redis
 sudo mkdir -p /etc/redis
 sudo cp redis.conf /etc/redis/
-
-# 配置Redis以守护进程方式运行（无systemd）
 sudo sed -i 's/^daemonize no/daemonize yes/' /etc/redis/redis.conf
 sudo sed -i 's/^supervised.*/supervised no/' /etc/redis/redis.conf
 sudo sed -i 's/^bind 127.0.0.1/# bind 127.0.0.1/' /etc/redis/redis.conf
 sudo sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf
 
-# 8. 安装进程管理工具pm2
-echo "步骤8/12：安装进程管理工具pm2..."
-sudo npm install -g pm2
-sudo npm install -g pnpm
-npm config set registry https://registry.npmmirror.com
+# 9. 安装pnpm（替代npm，更好的依赖管理）
+echo "步骤9/12：安装pnpm..."
+npm install -g pnpm@8.15.0
+pnpm config set registry https://registry.npmmirror.com
+echo "pnpm版本: $(pnpm --version)"
 
-# 9. 克隆青龙面板仓库
-echo "步骤9/12：克隆青龙面板仓库..."
+# 10. 克隆青龙面板仓库
+echo "步骤10/12：克隆青龙面板仓库..."
 cd ~
 if [ -d "qinglong" ]; then
     echo "青龙目录已存在，跳过克隆..."
-    cd qinglong
-    git pull
 else
     git clone https://github.com/whyour/qinglong.git
-    cd qinglong
 fi
 
-# 10. 安装青龙面板依赖
-echo "步骤10/12：安装青龙面板依赖..."
-npm install
+cd qinglong
 
-# 11. 创建WSL1专用启动脚本
-echo "步骤11/12：创建WSL1专用启动脚本..."
+# 11. 安装青龙面板依赖（使用pnpm解决版本冲突）
+echo "步骤11/12：安装青龙面板依赖..."
+echo "注意：使用pnpm安装，解决React版本冲突..."
+
+# 先清理可能的缓存
+rm -rf node_modules
+rm -rf pnpm-lock.yaml
+
+# 使用pnpm安装依赖
+pnpm install --prod
+
+# 如果pnpm安装失败，尝试使用npm的legacy模式
+if [ $? -ne 0 ]; then
+    echo "pnpm安装失败，尝试使用npm legacy模式..."
+    npm cache clean --force
+    rm -rf node_modules
+    npm install --legacy-peer-deps
+fi
+
+# 12. 创建启动脚本
+echo "步骤12/12：创建启动脚本..."
 
 # 创建Redis启动脚本
 cat > ~/start-redis.sh << 'EOF'
 #!/bin/bash
-# 启动Redis（无systemd方式）
+# 启动Redis
 echo "启动Redis服务..."
-sudo redis-server /etc/redis/redis.conf --daemonize yes
-sleep 2
-redis-cli ping
-if [ $? -eq 0 ]; then
-    echo "✓ Redis启动成功"
+if ! redis-cli ping > /dev/null 2>&1; then
+    sudo redis-server /etc/redis/redis.conf --daemonize yes
+    sleep 2
+    if redis-cli ping > /dev/null 2>&1; then
+        echo "✓ Redis启动成功"
+    else
+        echo "✗ Redis启动失败"
+        exit 1
+    fi
 else
-    echo "✗ Redis启动失败"
-    exit 1
+    echo "✓ Redis已在运行"
 fi
 EOF
 
@@ -122,22 +147,20 @@ chmod +x ~/start-redis.sh
 # 创建青龙面板启动脚本
 cat > ~/start-qinglong.sh << 'EOF'
 #!/bin/bash
-# 启动青龙面板（WSL1专用）
+# 启动青龙面板
 echo "启动青龙面板服务..."
 
-# 检查Redis是否运行
-if ! redis-cli ping > /dev/null 2>&1; then
-    echo "Redis未运行，正在启动..."
-    ~/start-redis.sh
-fi
+# 检查并启动Redis
+~/start-redis.sh
 
 # 启动青龙面板
 cd ~/qinglong
-pm2 start src/main.js --name qinglong
-pm2 save
-
-echo "青龙面板启动完成！"
-echo "访问地址：http://localhost:5700"
+if ! pnpm list 2>/dev/null | grep -q "qinglong"; then
+    echo "正在启动青龙面板..."
+    pnpm start
+else
+    echo "青龙面板已在运行"
+fi
 EOF
 
 chmod +x ~/start-qinglong.sh
@@ -148,57 +171,50 @@ cat > ~/stop-qinglong.sh << 'EOF'
 # 停止青龙面板
 echo "停止青龙面板服务..."
 cd ~/qinglong
-pm2 stop qinglong
-pm2 delete qinglong
-echo "青龙面板已停止"
+if pnpm list 2>/dev/null | grep -q "qinglong"; then
+    pnpm stop
+    echo "青龙面板已停止"
+else
+    echo "青龙面板未在运行"
+fi
 EOF
 
 chmod +x ~/stop-qinglong.sh
 
-# 创建重启脚本
-cat > ~/restart-qinglong.sh << 'EOF'
+# 创建PM2管理脚本
+cat > ~/pm2-manage.sh << 'EOF'
 #!/bin/bash
-# 重启青龙面板
-echo "重启青龙面板服务..."
-~/stop-qinglong.sh
-sleep 2
-~/start-qinglong.sh
+# PM2管理脚本
+cd ~/qinglong
+
+case "$1" in
+    start)
+        pm2 start ecosystem.config.js
+        pm2 save
+        echo "青龙面板已通过PM2启动"
+        ;;
+    stop)
+        pm2 stop qinglong
+        echo "青龙面板已停止"
+        ;;
+    restart)
+        pm2 restart qinglong
+        echo "青龙面板已重启"
+        ;;
+    status)
+        pm2 status
+        ;;
+    logs)
+        pm2 logs qinglong
+        ;;
+    *)
+        echo "用法: $0 {start|stop|restart|status|logs}"
+        exit 1
+        ;;
+esac
 EOF
 
-chmod +x ~/restart-qinglong.sh
-
-# 12. 创建WSL启动自动运行脚本
-echo "步骤12/12：创建WSL启动自动运行脚本..."
-cat > ~/.bashrc_qinglong << 'EOF'
-# 青龙面板WSL1自动启动配置
-if [ ! -f ~/.qinglong_auto_start_disable ]; then
-    echo "检测到WSL启动，正在检查青龙面板服务..."
-    
-    # 检查Redis是否运行
-    if ! redis-cli ping > /dev/null 2>&1; then
-        echo "启动Redis服务..."
-        sudo redis-server /etc/redis/redis.conf --daemonize yes > /dev/null 2>&1
-    fi
-    
-    # 检查青龙面板是否运行
-    if ! pm2 list | grep -q "qinglong"; then
-        echo "启动青龙面板..."
-        cd ~/qinglong
-        pm2 start src/main.js --name qinglong > /dev/null 2>&1
-        pm2 save > /dev/null 2>&1
-    fi
-    
-    echo "青龙面板服务状态："
-    pm2 list | grep -A2 "qinglong"
-fi
-EOF
-
-# 添加到.bashrc
-if ! grep -q "bashrc_qinglong" ~/.bashrc; then
-    echo "" >> ~/.bashrc
-    echo "# 青龙面板自动启动" >> ~/.bashrc
-    echo "source ~/.bashrc_qinglong" >> ~/.bashrc
-fi
+chmod +x ~/pm2-manage.sh
 
 # 首次启动服务
 echo "首次启动青龙面板服务..."
@@ -216,27 +232,31 @@ echo "2. 初始设置："
 echo "   首次访问需要设置管理员账号和密码"
 echo ""
 echo "3. 管理命令："
-echo "   ~/start-qinglong.sh    # 启动青龙面板"
-echo "   ~/stop-qinglong.sh     # 停止青龙面板"
-echo "   ~/restart-qinglong.sh  # 重启青龙面板"
-echo "   ~/start-redis.sh       # 启动Redis"
+echo "   ~/start-qinglong.sh     # 启动青龙面板"
+echo "   ~/stop-qinglong.sh      # 停止青龙面板"
+echo "   ~/pm2-manage.sh start   # PM2启动（推荐）"
+echo "   ~/pm2-manage.sh status  # 查看状态"
+echo "   ~/pm2-manage.sh logs    # 查看日志"
 echo ""
-echo "4. 禁用自动启动："
-echo "   touch ~/.qinglong_auto_start_disable"
+echo "4. 常用依赖安装："
+echo "   登录面板后，进入【依赖管理】安装："
 echo ""
-echo "5. 查看运行状态："
-echo "   pm2 status              # 查看进程状态"
-echo "   pm2 logs qinglong       # 查看青龙面板日志"
-echo "   redis-cli ping          # 检查Redis状态"
+echo "   Node.js依赖："
+echo "   axios crypto-js jsdom date-fns"
+echo "   tough-cookie tslib ws@7.4.3"
+echo "   ts-md5 jieba fs form-data"
+echo "   json5 global-agent png-js"
 echo ""
-echo "6. 安装常用依赖："
-echo "   登录青龙面板后，进入【依赖管理】安装："
-echo "   Node.js: axios crypto-js jsdom date-fns"
-echo "   Python3: requests canvas ping3 jieba"
+echo "   Python3依赖："
+echo "   requests canvas ping3 jieba"
+echo "   PyExecJS aiohttp"
+echo ""
+echo "5. 重启WSL后启动："
+echo "   运行: ~/start-redis.sh && ~/start-qinglong.sh"
 echo ""
 echo "=========================================="
-echo "数据库说明："
-echo "- 使用SQLite3作为默认数据库，无需额外配置"
-echo "- 数据文件位置：~/qinglong/db/"
-echo "- Redis用于缓存和会话管理"
+echo "问题解决："
+echo "1. 如果无法访问面板，检查端口：netstat -tlnp | grep 5700"
+echo "2. 查看日志：cd ~/qinglong && pnpm logs"
+echo "3. 重置依赖：rm -rf node_modules && pnpm install"
 echo "=========================================="

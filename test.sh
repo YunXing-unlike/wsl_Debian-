@@ -3,8 +3,8 @@ set -e
 clear
 
 echo -e "\033[32m=============================================\033[0m"
-echo -e "\033[32m      青龙面板部署脚本（完整修复版 v3.0）\033[0m"
-echo -e "\033[32m  修复：Git TLS | Python-apt | task命令 | 端口\033[0m"
+echo -e "\033[32m      青龙面板部署脚本（完整修复版 v3.1）\033[0m"
+echo -e "\033[32m  修复：Git TLS | Python-apt | task命令 | 权限\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
@@ -22,6 +22,9 @@ if [ "$WSL_FLAG" = "WSL" ]; then
     export npm_config_user=root
     export TMPDIR=/tmp
     export npm_config_tmp=/tmp
+    # WSL DNS修复
+    echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null 2>/dev/null || true
+    echo "nameserver 114.114.114.114" | sudo tee -a /etc/resolv.conf > /dev/null 2>/dev/null || true
 fi
 
 # ===================== 系统检测 =====================
@@ -41,32 +44,39 @@ fi
 
 echo "检测到系统: $OS_TYPE $OS_VERSION ($WSL_FLAG)"
 
-# ===================== 关键修复：Debian Git TLS问题 =====================
+# ===================== 关键修复：Git TLS问题（全平台）====================
+echo -e "\033[34m【关键修复】Git TLS修复...\033[0m"
+
+# 安装/更新git和ca-certificates
+sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
+sudo apt install -y git ca-certificates openssl libssl-dev 2>&1 | grep -v "Problem executing scripts" || true
+
+# 彻底修复Git TLS问题
+git config --global --unset-all http.sslBackend 2>/dev/null || true
+git config --global --unset-all http.version 2>/dev/null || true
+
+# 配置git使用HTTP/1.1（避免TLS 1.3握手问题）
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
+git config --global http.lowSpeedLimit 0
+git config --global http.lowSpeedTime 999999
+git config --global http.maxRequestBuffer 524288000
+git config --global core.compression 9
+git config --global pack.windowMemory 100m
+git config --global pack.packSizeLimit 100m
+git config --global pack.threads 1
+
+# 尝试使用OpenSSL后端（如果支持）
+git config --global http.sslBackend openssl 2>/dev/null || true
+
+# 对于Debian/WSL，禁用SSL验证作为最后手段（仅克隆时）
 if [ "$OS_TYPE" = "debian" ] || [ "$WSL_FLAG" = "WSL" ]; then
-    echo -e "\033[34m【关键修复】Debian/WSL Git TLS修复...\033[0m"
-    
-    # 安装git和ca-certificates
-    sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
-    
-    # 重新安装git使用OpenSSL而不是GnuTLS
-    sudo apt install -y git ca-certificates openssl libssl-dev 2>&1 | grep -v "Problem executing scripts" || true
-    
-    # 配置git使用HTTP/1.1（避免TLS 1.3问题）
-    git config --global http.version HTTP/1.1
-    git config --global http.postBuffer 524288000
-    git config --global http.lowSpeedLimit 0
-    git config --global http.lowSpeedTime 999999
-    
-    # 增大SSL缓存
-    git config --global http.sslVerify true
-    git config --global core.compression 9
-    
-    # 配置git使用OpenSSL（如果编译支持）
-    git config --global http.sslBackend openssl 2>/dev/null || true
-    
-    echo -e "\033[32mGit TLS配置完成\033[0m"
-    echo ""
+    echo -e "\033[33mDebian/WSL环境：配置Git禁用SSL验证（仅用于克隆）\033[0m"
+    git config --global http.sslVerify false
 fi
+
+echo -e "\033[32mGit TLS配置完成\033[0m"
+echo ""
 
 # ===================== 关键修复：Python-apt模块（Ubuntu）====================
 if [ "$OS_TYPE" = "ubuntu" ]; then
@@ -195,7 +205,6 @@ GIT_PROXY_LIST=(
     "https://mirror.ghproxy.com/https://github.com/"
     "https://ghproxy.com/https://github.com/"
     "https://hub.gitmirror.com/https://github.com/"
-    "https://raw.githubusercontent.com/whyour/qinglong/"
 )
 
 PROXY_WORKING=false
@@ -212,11 +221,6 @@ done
 
 if [ "$PROXY_WORKING" = false ]; then
     echo -e "\033[33m警告：所有Git代理测试失败，将尝试直连...\033[0m"
-fi
-
-if [ "$WSL_FLAG" = "WSL" ]; then
-    git config --global http.sslVerify false
-    git config --global core.compression 9
 fi
 echo ""
 
@@ -236,7 +240,12 @@ echo ""
 # ===================== 步骤4：安装pnpm 10.x（多方案容错）====================
 echo -e "\033[34m【步骤4/10】安装pnpm 10.x...\033[0m"
 
+# 先检查现有pnpm版本
+CURRENT_PNPM=$(pnpm --version 2>/dev/null || echo "none")
+echo "当前pnpm版本: $CURRENT_PNPM"
+
 install_pnpm() {
+    # 方法1：使用npm安装
     if command -v npm &>/dev/null; then
         echo "尝试使用npm安装pnpm..."
         sudo rm -f /usr/bin/pnpm /usr/local/bin/pnpm 2>/dev/null || true
@@ -246,6 +255,7 @@ install_pnpm() {
         }
     fi
     
+    # 方法2：使用官方脚本安装
     echo "尝试使用官方脚本安装pnpm..."
     curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.6.2 sh - && {
         export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -257,6 +267,7 @@ install_pnpm() {
         return 0
     }
     
+    # 方法3：直接下载二进制
     echo "尝试直接下载pnpm二进制..."
     local pnpm_url="https://fastgit.cc/https://github.com/pnpm/pnpm/releases/download/v10.6.2/pnpm-linux-x64"
     local pnpm_tmp="/tmp/pnpm"
@@ -273,14 +284,19 @@ install_pnpm() {
     return 1
 }
 
-if install_pnpm; then
-    :
+# 如果当前版本不是10.x，尝试安装
+if [[ "$CURRENT_PNPM" != 10.* ]]; then
+    if install_pnpm; then
+        :
+    else
+        echo -e "\033[31m所有pnpm安装方案均失败，尝试安装pnpm 9.x作为最后回退...\033[0m"
+        sudo npm install -g pnpm@9.15.0 --force || {
+            echo -e "\033[31m错误：无法安装pnpm，脚本终止\033[0m"
+            exit 1
+        }
+    fi
 else
-    echo -e "\033[31m所有pnpm安装方案均失败，尝试安装pnpm 9.x作为最后回退...\033[0m"
-    sudo npm install -g pnpm@9.15.0 --force || {
-        echo -e "\033[31m错误：无法安装pnpm，脚本终止\033[0m"
-        exit 1
-    }
+    echo -e "\033[32mpnpm 10.x 已安装，跳过\033[0m"
 fi
 
 pnpm config set registry https://registry.npmmirror.com/ 2>/dev/null || true
@@ -335,25 +351,34 @@ add_deadsnakes_ppa() {
     local codename=$1
     echo "添加Deadsnakes PPA..."
     
+    # 方法1：使用add-apt-repository
     if command -v add-apt-repository &>/dev/null; then
-        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null && return 0
-    fi
-    
-    echo "手动添加PPA源和GPG密钥..."
-    echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
-    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && return 0
-    
-    if command -v gpg &>/dev/null; then
-        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/deadsnakes.gpg \
-            --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && {
-            echo "deb [signed-by=/usr/share/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null && {
+            sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
             return 0
         }
     fi
     
-    if curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" 2>/dev/null | sudo apt-key add - 2>/dev/null; then
-        return 0
+    # 方法2：手动添加PPA源
+    echo "手动添加PPA源和GPG密钥..."
+    sudo rm -f /etc/apt/sources.list.d/deadsnakes.list 2>/dev/null || true
+    
+    # 使用gpg密钥环
+    if command -v gpg &>/dev/null; then
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/deadsnakes.gpg \
+            --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && {
+            echo "deb [signed-by=/usr/share/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+            sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
+            return 0
+        }
     fi
+    
+    # 方法3：使用apt-key（旧方式）
+    echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${codename} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+    sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys BA6932366A755776 2>/dev/null && {
+        sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
+        return 0
+    }
     
     return 1
 }
@@ -370,13 +395,23 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
             ;;
         jammy)
             echo "Ubuntu 22.04 尝试安装Python 3.11..."
-            add_deadsnakes_ppa "jammy" && sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
+            add_deadsnakes_ppa "jammy"
             install_python "3.11" || install_python "3.10" || install_python "3.8"
             ;;
         focal)
             echo "Ubuntu 20.04 尝试安装Python 3.10..."
-            add_deadsnakes_ppa "focal" && sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
-            install_python "3.10" || install_python "3.9" || install_python "3.8"
+            add_deadsnakes_ppa "focal"
+            # 强制更新apt缓存
+            sudo apt update -y 2>&1 | grep -v "Problem executing scripts" || true
+            # 尝试安装python3.10
+            if sudo apt install -y python3.10 python3.10-venv python3.10-dev 2>&1 | grep -v "Problem executing scripts"; then
+                echo -e "\033[32mpython3.10 安装成功\033[0m"
+                PYTHON_VERSION="3.10"
+                PYTHON_INSTALLED=true
+            else
+                echo -e "\033[33mpython3.10安装失败，尝试其他版本...\033[0m"
+                install_python "3.9" || install_python "3.8"
+            fi
             ;;
         *)
             echo "未知Ubuntu版本，尝试安装Python 3.12..."
@@ -520,40 +555,60 @@ echo ""
 # ===================== 步骤10：部署青龙面板（关键修复）====================
 echo -e "\033[34m【步骤10/10】部署青龙面板...\033[0m"
 
-# 检查并清理旧版本
+# 检查并清理旧版本（修复权限问题）
 if [ -d "$HOME/qinglong" ]; then
     echo "检测到已有青龙目录，备份并重建..."
-    mv ~/qinglong ~/qinglong.bak.$(date +%Y%m%d%H%M%S)
+    BACKUP_NAME="$HOME/qinglong.bak.$(date +%Y%m%d%H%M%S)"
+    # 使用sudo确保权限
+    sudo mv ~/qinglong "$BACKUP_NAME" 2>/dev/null || {
+        echo "普通mv失败，尝试强制备份..."
+        sudo rm -rf "$BACKUP_NAME" 2>/dev/null || true
+        sudo cp -r ~/qinglong "$BACKUP_NAME" 2>/dev/null || true
+        sudo rm -rf ~/qinglong 2>/dev/null || {
+            echo -e "\033[31m错误：无法清理旧目录，请手动删除 ~/qinglong 后重试\033[0m"
+            exit 1
+        }
+    }
+    echo "已备份到: $BACKUP_NAME"
 fi
 
-# 克隆青龙源码（带重试机制）
+# 克隆青龙源码（带重试机制和多种方法）
 echo "克隆青龙面板源码..."
 cd ~
 
-# 尝试多次克隆
 clone_success=false
-for attempt in 1 2 3; do
-    echo "克隆尝试 $attempt/3..."
-    
-    if git clone --depth 1 https://github.com/whyour/qinglong.git 2>/dev/null; then
+clone_methods=(
+    "git clone --depth 1 https://github.com/whyour/qinglong.git"
+    "git clone --depth 1 https://ghfast.top/https://github.com/whyour/qinglong.git"
+    "git clone --depth 1 git@github.com:whyour/qinglong.git"
+    "GIT_SSL_NO_VERIFY=true git clone --depth 1 https://github.com/whyour/qinglong.git"
+)
+
+for method in "${clone_methods[@]}"; do
+    echo "尝试克隆方法: $method"
+    if eval "$method" 2>/dev/null; then
         clone_success=true
         break
     fi
-    
-    echo "直连失败，尝试使用代理..."
-    git config --global url."https://github.com/".insteadOf "https://github.com/"
-    
-    if git clone --depth 1 https://github.com/whyour/qinglong.git 2>/dev/null; then
-        clone_success=true
-        break
-    fi
-    
-    echo "等待3秒后重试..."
-    sleep 3
+    echo "失败，尝试下一种方法..."
+    sleep 2
 done
 
+# 如果所有方法都失败，尝试使用wget/curl下载zip
 if [ "$clone_success" = false ]; then
-    echo -e "\033[31m错误：无法克隆青龙源码，请检查网络连接\033[0m"
+    echo "Git克隆全部失败，尝试下载ZIP包..."
+    if curl -fsSL -o /tmp/qinglong.zip "https://ghfast.top/https://github.com/whyour/qinglong/archive/refs/heads/master.zip" 2>/dev/null || \
+       curl -fsSL -o /tmp/qinglong.zip "https://mirror.ghproxy.com/https://github.com/whyour/qinglong/archive/refs/heads/master.zip" 2>/dev/null; then
+        sudo apt install -y unzip 2>&1 | grep -v "Problem executing scripts" || true
+        unzip -q /tmp/qinglong.zip -d /tmp/
+        mv /tmp/qinglong-master ~/qinglong
+        clone_success=true
+        echo -e "\033[32m通过ZIP下载成功\033[0m"
+    fi
+fi
+
+if [ "$clone_success" = false ]; then
+    echo -e "\033[31m错误：无法获取青龙源码，请检查网络连接\033[0m"
     exit 1
 fi
 
@@ -914,7 +969,6 @@ case "$1" in
     repo)
         shift
         echo "拉取仓库: $@"
-        # 这里可以集成 git clone 逻辑
         cd "$QL_DIR/scripts" && git clone "$@" 2>/dev/null || echo "拉取失败"
         ;;
     raw)

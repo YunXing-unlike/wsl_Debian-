@@ -5,9 +5,11 @@ clear
 # 打印脚本说明
 echo -e "\033[32m=============================================\033[0m"
 echo -e "\033[32m      青龙面板部署脚本（全自动+全维度加速）\033[0m"
-echo -e "\033[32m  适配：Debian/Ubuntu/WSL Linux子系统\033[0m"
+echo -e "\033[32m  适配：Ubuntu 20.04/22.04/24.04/24.10/25.04\033[0m"
+echo -e "\033[32m        Debian 11/12/13 (Trixie)\033[0m"
+echo -e "\033[32m        WSL1/WSL2 全系列\033[0m"
 echo -e "\033[32m  加速源：阿里云(APT) | 清华源(pip) | 淘宝源(pnpm/npm) | GitHub代理\033[0m"
-echo -e "\033[32m  版本：Node.js 20 LTS | Python 3.10+ | pnpm 9.x\033[0m"
+echo -e "\033[32m  版本：Node.js 22 LTS | Python 3.10-3.13 | pnpm 10.x\033[0m"
 echo -e "\033[32m=============================================\033[0m"
 echo ""
 
@@ -34,10 +36,12 @@ sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d) 2>/dev/n
 
 if [ "$OS_TYPE" = "ubuntu" ]; then
     case $OS_VERSION in
-        focal) CODENAME="focal" ;;
-        jammy) CODENAME="jammy" ;;
-        noble) CODENAME="noble" ;;
-        *) CODENAME="jammy" ;;
+        focal) CODENAME="focal" ;;      # 20.04
+        jammy) CODENAME="jammy" ;;      # 22.04
+        noble) CODENAME="noble" ;;      # 24.04
+        oracular) CODENAME="oracular" ;; # 24.10
+        plucky) CODENAME="plucky" ;;    # 25.04
+        *) CODENAME="noble" ;;          # 默认24.04
     esac
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb http://mirrors.aliyun.com/ubuntu/ $CODENAME main restricted universe multiverse
@@ -51,10 +55,11 @@ deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-backports main restricted un
 EOF
 elif [ "$OS_TYPE" = "debian" ]; then
     case $OS_VERSION in
-        bookworm) CODENAME="bookworm" ;;
-        bullseye) CODENAME="bullseye" ;;
-        buster) CODENAME="buster" ;;
-        *) CODENAME="bookworm" ;;
+        trixie) CODENAME="trixie" ;;    # 13
+        bookworm) CODENAME="bookworm" ;; # 12
+        bullseye) CODENAME="bullseye" ;; # 11
+        buster) CODENAME="buster" ;;    # 10
+        *) CODENAME="bookworm" ;;       # 默认12
     esac
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb http://mirrors.aliyun.com/debian/ $CODENAME main non-free-firmware contrib non-free
@@ -65,14 +70,16 @@ deb http://mirrors.aliyun.com/debian/ $CODENAME-updates main non-free-firmware c
 deb-src http://mirrors.aliyun.com/debian/ $CODENAME-updates main non-free-firmware contrib non-free
 EOF
 else
-    # 兜底配置
+    # 兜底配置 - Ubuntu 24.04 LTS
     sudo tee /etc/apt/sources.list > /dev/null <<EOF
-deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ noble-backports main restricted universe multiverse
+deb-src http://mirrors.aliyun.com/ubuntu/ noble-backports main restricted universe multiverse
 EOF
 fi
 
@@ -82,12 +89,12 @@ echo ""
 
 # 3. 配置Git国内加速
 echo "配置Git国内加速..."
-# 使用多个备选代理，自动选择可用的
 GIT_PROXY_LIST=(
     "https://ghfast.top/https://github.com/"
     "https://mirror.ghproxy.com/https://github.com/"
     "https://ghproxy.com/https://github.com/"
     "https://hub.gitmirror.com/https://github.com/"
+    "https://raw.githubusercontent.com/"
 )
 
 for proxy in "${GIT_PROXY_LIST[@]}"; do
@@ -110,11 +117,11 @@ echo -e "\033[34m【步骤1/10】安装基础工具(Git/curl/wget/ca-certificate
 sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
 echo ""
 
-# ===================== 2. 安装Node.js 20.x LTS =====================
-echo -e "\033[34m【步骤2/10】安装Node.js 20.x LTS...\033[0m"
+# ===================== 2. 安装Node.js 22.x LTS =====================
+echo -e "\033[34m【步骤2/10】安装Node.js 22.x LTS...\033[0m"
 
-# 安装NodeSource源
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# 安装NodeSource源 (Node.js 22.x)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 
 # 安装Node.js
 sudo apt install -y nodejs
@@ -128,11 +135,11 @@ npm config set registry https://registry.npmmirror.com/
 npm config set cache /tmp/npm-cache --global
 echo ""
 
-# ===================== 3. 安装pnpm 9.x =====================
-echo -e "\033[34m【步骤3/10】安装pnpm 9.x...\033[0m"
+# ===================== 3. 安装pnpm 10.x =====================
+echo -e "\033[34m【步骤3/10】安装pnpm 10.x...\033[0m"
 
 # 使用官方安装脚本（国内镜像）
-curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=9.15.0 sh -
+curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.6.2 sh -
 
 # 加载pnpm
 export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -146,7 +153,7 @@ if command -v pnpm &>/dev/null; then
 else
     # 备用方案：使用npm安装pnpm
     echo "使用npm安装pnpm..."
-    sudo npm install -g pnpm@9.15.0
+    sudo npm install -g pnpm@10.6.2
     echo -e "\033[32mpnpm安装成功: $(pnpm --version)\033[0m"
 fi
 
@@ -161,122 +168,136 @@ sudo apt update -y
 sudo apt upgrade -y
 echo ""
 
-# ===================== 5. 安装Python（智能适配版本） =====================
-echo -e "\033[34m【步骤5/10】安装Python（智能适配系统版本）...\033[0m"
+# ===================== 5. 安装Python（智能适配最新版本） =====================
+echo -e "\033[34m【步骤5/10】安装Python（智能适配系统最新版本）...\033[0m"
 
-install_python_from_source() {
-    local PY_VERSION=$1
-    echo "从源码编译安装 Python $PY_VERSION..."
+# 定义Python版本映射（各系统最新稳定版）
+declare -A PYTHON_VERSION_MAP=(
+    # Ubuntu版本
+    ["focal"]="3.10"      # 20.04 - 通过PPA安装3.10
+    ["jammy"]="3.11"      # 22.04 - 通过PPA安装3.11（原生3.10）
+    ["noble"]="3.12"      # 24.04 - 原生3.12 [^33^]
+    ["oracular"]="3.12"   # 24.10 - 原生3.12
+    ["plucky"]="3.13"     # 25.04 - 原生3.13（开发版）
+    # Debian版本
+    ["trixie"]="3.13"     # 13 - 原生3.13 [^31^][^34^]
+    ["bookworm"]="3.11"   # 12 - 原生3.11
+    ["bullseye"]="3.9"    # 11 - 原生3.9
+    ["buster"]="3.7"      # 10 - 原生3.7
+)
+
+TARGET_PYTHON="${PYTHON_VERSION_MAP[$OS_VERSION]}"
+PYTHON_INSTALLED=false
+
+if [ -z "$TARGET_PYTHON" ]; then
+    TARGET_PYTHON="3.12"  # 默认回退
+fi
+
+echo "目标Python版本: $TARGET_PYTHON"
+
+# 安装Python函数
+install_python() {
+    local py_ver=$1
+    local py_pkg="python${py_ver}"
     
-    # 安装编译依赖
-    sudo apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
-        libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev \
-        wget tk-dev uuid-dev libgdbm-compat-dev
+    # 尝试直接安装（系统自带或已配置源）
+    if sudo apt install -y ${py_pkg} ${py_pkg}-venv ${py_pkg}-dev 2>/dev/null; then
+        echo -e "\033[32m${py_pkg} 安装成功\033[0m"
+        PYTHON_VERSION="${py_ver}"
+        PYTHON_INSTALLED=true
+        return 0
+    fi
     
-    cd /tmp
-    wget "https://www.python.org/ftp/python/${PY_VERSION}/Python-${PY_VERSION}.tgz" --no-check-certificate || \
-        wget "https://npm.taobao.org/mirrors/python/${PY_VERSION}/Python-${PY_VERSION}.tgz" --no-check-certificate
+    # 如果失败且是Ubuntu，尝试Deadsnakes PPA
+    if [ "$OS_TYPE" = "ubuntu" ] && [ "$py_ver" != "3.12" ] && [ "$py_ver" != "3.13" ]; then
+        echo "尝试通过Deadsnakes PPA安装 ${py_ver}..."
+        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || {
+            # 手动添加PPA（兼容WSL）
+            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F23C5A6CF475977595C89F51BA6932366A755776 2>/dev/null || true
+            echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu ${OS_VERSION} main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
+        }
+        sudo apt update -y
+        
+        # 再次尝试安装
+        if sudo apt install -y ${py_pkg} ${py_pkg}-venv ${py_pkg}-dev ${py_pkg}-distutils 2>/dev/null; then
+            echo -e "\033[32m${py_pkg} 通过PPA安装成功\033[0m"
+            PYTHON_VERSION="${py_ver}"
+            PYTHON_INSTALLED=true
+            return 0
+        fi
+    fi
     
-    tar -xzf "Python-${PY_VERSION}.tgz"
-    cd "Python-${PY_VERSION}"
-    
-    ./configure --enable-optimizations --enable-shared --prefix=/usr/local \
-        --with-ensurepip=install --enable-loadable-sqlite-extensions
-    
-    make -j$(nproc)
-    sudo make altinstall
-    
-    cd ~
-    rm -rf "/tmp/Python-${PY_VERSION}*"
+    return 1
 }
 
-# 根据系统版本智能选择Python版本
-PYTHON_VERSION=""
-
+# 主安装逻辑
 if [ "$OS_TYPE" = "ubuntu" ]; then
     case $OS_VERSION in
-        focal)
-            # Ubuntu 20.04: 使用系统自带3.8或安装3.10
-            echo "Ubuntu 20.04 detected. 尝试安装Python 3.10..."
-            
-            # 添加deadsnakes PPA
-            sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || {
-                echo "PPA添加失败，尝试手动添加..."
-                sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys F23C5A6CF475977595C89F51BA6932366A755776 2>/dev/null || true
-                echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list
-                sudo apt update -y
-            }
-            
-            sudo apt update -y
-            
-            # 尝试安装python3.10
-            if sudo apt install -y python3.10 python3.10-venv python3.10-dev python3.10-distutils 2>/dev/null; then
-                PYTHON_VERSION="3.10"
-                echo -e "\033[32mPython 3.10安装成功\033[0m"
-            else
-                echo "Python 3.10安装失败，使用系统自带Python 3.8..."
-                sudo apt install -y python3.8 python3.8-venv python3.8-dev
-                PYTHON_VERSION="3.8"
-            fi
+        noble|oracular)
+            # Ubuntu 24.04/24.10 - 原生Python 3.12 [^33^]
+            echo "Ubuntu 24.04/24.10 使用原生Python 3.12..."
+            install_python "3.12" || install_python "3.11" || install_python "3.10"
             ;;
-            
+        plucky)
+            # Ubuntu 25.04 - 原生Python 3.13
+            echo "Ubuntu 25.04 使用原生Python 3.13..."
+            install_python "3.13" || install_python "3.12"
+            ;;
         jammy)
-            # Ubuntu 22.04: 默认3.10，可选3.11
-            echo "Ubuntu 22.04 detected. 安装Python 3.11..."
-            sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-            sudo apt update -y
-            
-            if sudo apt install -y python3.11 python3.11-venv python3.11-dev python3.11-distutils 2>/dev/null; then
-                PYTHON_VERSION="3.11"
-            else
-                sudo apt install -y python3.10 python3.10-venv python3.10-dev
-                PYTHON_VERSION="3.10"
-            fi
+            # Ubuntu 22.04 - 尝试3.11，回退3.10
+            echo "Ubuntu 22.04 尝试安装Python 3.11..."
+            install_python "3.11" || install_python "3.10" || install_python "3.8"
             ;;
-            
-        noble)
-            # Ubuntu 24.04: 默认3.12
-            echo "Ubuntu 24.04 detected. 使用系统自带Python 3.12..."
-            sudo apt install -y python3.12 python3.12-venv python3.12-dev
-            PYTHON_VERSION="3.12"
+        focal)
+            # Ubuntu 20.04 - 尝试3.10，回退3.8
+            echo "Ubuntu 20.04 尝试安装Python 3.10..."
+            install_python "3.10" || install_python "3.9" || install_python "3.8"
             ;;
-            
         *)
-            # 未知版本：使用系统默认或安装3.10
-            echo "未知Ubuntu版本，尝试安装Python 3.10..."
-            sudo apt install -y python3 python3-venv python3-dev || install_python_from_source "3.10.13"
-            PYTHON_VERSION=$(python3 --version 2>/dev/null | awk '{print $2}' | cut -d. -f1,2 || echo "3.10")
+            # 未知Ubuntu版本
+            echo "未知Ubuntu版本，尝试安装Python 3.12..."
+            install_python "3.12" || install_python "3.11" || install_python "3.10" || install_python "3.8"
             ;;
     esac
     
 elif [ "$OS_TYPE" = "debian" ]; then
     case $OS_VERSION in
+        trixie)
+            # Debian 13 - 原生Python 3.13 [^31^][^34^]
+            echo "Debian 13 (Trixie) 使用原生Python 3.13..."
+            install_python "3.13" || install_python "3.11"
+            ;;
         bookworm)
-            echo "Debian 12 detected. 安装Python 3.11..."
-            sudo apt install -y python3.11 python3.11-venv python3.11-dev
-            PYTHON_VERSION="3.11"
+            # Debian 12 - 原生Python 3.11
+            echo "Debian 12 (Bookworm) 使用原生Python 3.11..."
+            install_python "3.11" || install_python "3.9"
             ;;
         bullseye)
-            echo "Debian 11 detected. 安装Python 3.9..."
-            sudo apt install -y python3.9 python3.9-venv python3.9-dev
-            PYTHON_VERSION="3.9"
+            # Debian 11 - 原生Python 3.9
+            echo "Debian 11 (Bullseye) 使用原生Python 3.9..."
+            install_python "3.9" || install_python "3.8"
             ;;
         buster)
-            echo "Debian 10 detected. 安装Python 3.7..."
-            sudo apt install -y python3.7 python3.7-venv python3.7-dev
-            PYTHON_VERSION="3.7"
+            # Debian 10 - 原生Python 3.7
+            echo "Debian 10 (Buster) 使用原生Python 3.7..."
+            install_python "3.7" || install_python "3.8"
             ;;
         *)
-            echo "未知Debian版本，安装系统默认Python3..."
-            sudo apt install -y python3 python3-venv python3-dev
-            PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1,2)
+            echo "未知Debian版本，尝试安装Python 3.11..."
+            install_python "3.11" || install_python "3.9" || install_python "3.8"
             ;;
     esac
 else
     # WSL或其他系统
-    echo "WSL/其他系统，安装Python 3.10..."
-    sudo apt install -y python3 python3-venv python3-dev || install_python_from_source "3.10.13"
-    PYTHON_VERSION="3.10"
+    echo "WSL/其他系统，尝试安装Python 3.12..."
+    install_python "3.12" || install_python "3.11" || install_python "3.10" || install_python "3.9" || install_python "3.8"
+fi
+
+# 最终回退方案
+if [ "$PYTHON_INSTALLED" = false ]; then
+    echo "警告：特定版本安装失败，尝试安装系统默认Python3..."
+    sudo apt install -y python3 python3-venv python3-dev python3-pip
+    PYTHON_VERSION=$(python3 --version 2>/dev/null | awk '{print $2}' | cut -d. -f1,2 || echo "3.8")
 fi
 
 echo -e "\033[32mPython版本确认: $PYTHON_VERSION\033[0m"
@@ -287,17 +308,22 @@ echo -e "\033[34m【步骤6/10】配置Python默认版本和pip...\033[0m"
 
 # 设置默认python3
 if command -v python${PYTHON_VERSION} &>/dev/null; then
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 2>/dev/null || true
+    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 100 2>/dev/null || true
     sudo ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python 2>/dev/null || true
 fi
 
 # 确保python命令可用
-sudo apt install -y python-is-python3 2>/dev/null || true
+sudo apt install -y python-is-python3 2>/dev/null || {
+    sudo ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
+}
 
 # 安装/升级pip
 echo "安装并配置pip..."
-curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python${PYTHON_VERSION} 2>/dev/null || \
+curl -sS https://bootstrap.pypa.io/get-pip.py 2>/dev/null | sudo python${PYTHON_VERSION} 2>/dev/null || {
+    # 备用方案
     sudo apt install -y python3-pip
+    python3 -m pip install --upgrade pip
+}
 
 # 升级pip并配置清华源
 python3 -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple 2>/dev/null || true

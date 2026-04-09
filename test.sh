@@ -87,8 +87,13 @@ sudo apt clean
 sudo apt update -y
 echo ""
 
-# 3. 配置Git国内加速
-echo "配置Git国内加速..."
+# ===================== 步骤1：安装基础工具（必须先安装git）====================
+echo -e "\033[34m【步骤1/10】安装基础工具(Git/curl/wget/ca-certificates)...\033[0m"
+sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
+echo ""
+
+# ===================== 步骤2：配置Git国内加速（现在git已安装）====================
+echo -e "\033[34m【步骤2/10】配置Git国内加速...\033[0m"
 GIT_PROXY_LIST=(
     "https://ghfast.top/https://github.com/"
     "https://mirror.ghproxy.com/https://github.com/"
@@ -112,13 +117,8 @@ if [ "$WSL_FLAG" = "WSL" ]; then
 fi
 echo ""
 
-# ===================== 1. 安装基础工具 =====================
-echo -e "\033[34m【步骤1/10】安装基础工具(Git/curl/wget/ca-certificates)...\033[0m"
-sudo apt install -y git curl wget ca-certificates software-properties-common apt-transport-https gnupg lsb-release
-echo ""
-
-# ===================== 2. 安装Node.js 22.x LTS =====================
-echo -e "\033[34m【步骤2/10】安装Node.js 22.x LTS...\033[0m"
+# ===================== 步骤3：安装Node.js 22.x LTS =====================
+echo -e "\033[34m【步骤3/10】安装Node.js 22.x LTS...\033[0m"
 
 # 安装NodeSource源 (Node.js 22.x)
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -135,8 +135,8 @@ npm config set registry https://registry.npmmirror.com/
 npm config set cache /tmp/npm-cache --global
 echo ""
 
-# ===================== 3. 安装pnpm 10.x =====================
-echo -e "\033[34m【步骤3/10】安装pnpm 10.x...\033[0m"
+# ===================== 步骤4：安装pnpm 10.x =====================
+echo -e "\033[34m【步骤4/10】安装pnpm 10.x...\033[0m"
 
 # 使用官方安装脚本（国内镜像）
 curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.6.2 sh -
@@ -162,25 +162,25 @@ pnpm config set registry https://registry.npmmirror.com/
 pnpm config set store-dir /tmp/pnpm-store
 echo ""
 
-# ===================== 4. 更新系统包 =====================
-echo -e "\033[34m【步骤4/10】更新系统包列表并升级...\033[0m"
+# ===================== 步骤5：更新系统包 =====================
+echo -e "\033[34m【步骤5/10】更新系统包列表并升级...\033[0m"
 sudo apt update -y
 sudo apt upgrade -y
 echo ""
 
-# ===================== 5. 安装Python（智能适配最新版本） =====================
-echo -e "\033[34m【步骤5/10】安装Python（智能适配系统最新版本）...\033[0m"
+# ===================== 步骤6：安装Python（智能适配最新版本）====================
+echo -e "\033[34m【步骤6/10】安装Python（智能适配系统最新版本）...\033[0m"
 
 # 定义Python版本映射（各系统最新稳定版）
 declare -A PYTHON_VERSION_MAP=(
     # Ubuntu版本
     ["focal"]="3.10"      # 20.04 - 通过PPA安装3.10
     ["jammy"]="3.11"      # 22.04 - 通过PPA安装3.11（原生3.10）
-    ["noble"]="3.12"      # 24.04 - 原生3.12 [^33^]
+    ["noble"]="3.12"      # 24.04 - 原生3.12
     ["oracular"]="3.12"   # 24.10 - 原生3.12
     ["plucky"]="3.13"     # 25.04 - 原生3.13（开发版）
     # Debian版本
-    ["trixie"]="3.13"     # 13 - 原生3.13 [^31^][^34^]
+    ["trixie"]="3.13"     # 13 - 原生3.13 [^49^][^50^]
     ["bookworm"]="3.11"   # 12 - 原生3.11
     ["bullseye"]="3.9"    # 11 - 原生3.9
     ["buster"]="3.7"      # 10 - 原生3.7
@@ -234,7 +234,7 @@ install_python() {
 if [ "$OS_TYPE" = "ubuntu" ]; then
     case $OS_VERSION in
         noble|oracular)
-            # Ubuntu 24.04/24.10 - 原生Python 3.12 [^33^]
+            # Ubuntu 24.04/24.10 - 原生Python 3.12
             echo "Ubuntu 24.04/24.10 使用原生Python 3.12..."
             install_python "3.12" || install_python "3.11" || install_python "3.10"
             ;;
@@ -263,7 +263,7 @@ if [ "$OS_TYPE" = "ubuntu" ]; then
 elif [ "$OS_TYPE" = "debian" ]; then
     case $OS_VERSION in
         trixie)
-            # Debian 13 - 原生Python 3.13 [^31^][^34^]
+            # Debian 13 - 原生Python 3.13 [^49^][^50^]
             echo "Debian 13 (Trixie) 使用原生Python 3.13..."
             install_python "3.13" || install_python "3.11"
             ;;
@@ -303,8 +303,8 @@ fi
 echo -e "\033[32mPython版本确认: $PYTHON_VERSION\033[0m"
 echo ""
 
-# ===================== 6. 配置Python默认版本和pip =====================
-echo -e "\033[34m【步骤6/10】配置Python默认版本和pip...\033[0m"
+# ===================== 步骤7：配置Python默认版本和pip =====================
+echo -e "\033[34m【步骤7/10】配置Python默认版本和pip...\033[0m"
 
 # 设置默认python3
 if command -v python${PYTHON_VERSION} &>/dev/null; then
@@ -346,8 +346,8 @@ pip install --user certifi urllib3 requests --upgrade -i https://pypi.tuna.tsing
 
 echo ""
 
-# ===================== 7. 环境版本验证 =====================
-echo -e "\033[34m【步骤7/10】验证环境版本...\033[0m"
+# ===================== 步骤8：环境版本验证 =====================
+echo -e "\033[34m【步骤8/10】验证环境版本...\033[0m"
 echo -e "Python版本: \033[32m$(python3 --version 2>/dev/null | awk '{print $2}')\033[0m"
 echo -e "pip版本: \033[32m$(pip3 --version 2>/dev/null | awk '{print $2}' | cut -d'/' -f1)\033[0m"
 echo -e "Node.js版本: \033[32m$(node --version 2>/dev/null)\033[0m"
@@ -355,14 +355,14 @@ echo -e "npm版本: \033[32m$(npm --version 2>/dev/null)\033[0m"
 echo -e "pnpm版本: \033[32m$(pnpm --version 2>/dev/null)\033[0m"
 echo ""
 
-# ===================== 8. 修复CA证书和网络依赖 =====================
-echo -e "\033[34m【步骤8/10】修复CA证书和网络依赖...\033[0m"
+# ===================== 步骤9：修复CA证书和网络依赖 =====================
+echo -e "\033[34m【步骤9/10】修复CA证书和网络依赖...\033[0m"
 sudo apt-get install --reinstall ca-certificates -y 2>/dev/null || true
 sudo update-ca-certificates --fresh 2>/dev/null || true
 echo ""
 
-# ===================== 9. 部署青龙面板 =====================
-echo -e "\033[34m【步骤9/10】部署青龙面板...\033[0m"
+# ===================== 步骤10：部署青龙面板 =====================
+echo -e "\033[34m【步骤10/10】部署青龙面板...\033[0m"
 
 # 检查并清理旧版本
 if [ -d "$HOME/qinglong" ]; then
@@ -401,7 +401,7 @@ pnpm install || {
 
 echo ""
 
-# ===================== 10. 启动青龙面板 =====================
+# ===================== 启动青龙面板 =====================
 echo -e "\033[32m=============================================\033[0m"
 echo -e "\033[32m              部署完成！🎉\033[0m"
 echo -e "\033[32m=============================================\033[0m"

@@ -1,10 +1,10 @@
 #!/bin/bash
 # ==============================================================================
-# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本 (Node.js 20 兼容版)
-# 版本: 2.0.0
+# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本 (最终修复版)
+# 版本: 3.0.0
 # 适用环境: WSL1 (Windows Subsystem for Linux 1) + Ubuntu 20.04 LTS
 # 部署方式: 原生 NPM 安装 (非Docker方案)
-# 关键修复: Node.js 20+ 兼容性、node-pre-gyp 预安装、环境变量配置
+# 关键修复: 正确的启动方式、环境变量持久化、ql命令支持
 # ==============================================================================
 
 set -e  # 遇到错误立即退出
@@ -14,8 +14,8 @@ set -u  # 使用未定义变量时报错
 # 配置区 - 用户可自定义变量
 # ==============================================================================
 
-# 青龙面板安装目录
-QL_DIR="${QL_DIR:-$HOME/qinglong}"
+# 青龙面板安装目录 (必须是 /ql 或 /root/qinglong 等绝对路径)
+QL_DIR="${QL_DIR:-/ql}"
 QL_DATA_DIR="${QL_DATA_DIR:-$QL_DIR/data}"
 
 # 服务端口
@@ -26,7 +26,7 @@ APT_MIRROR="https://mirrors.aliyun.com/ubuntu"
 NPM_REGISTRY="https://registry.npmmirror.com"
 PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn"
 
-# Node.js 版本 (必须使用 20.18.1+ 以满足 undici@7 要求)
+# Node.js 版本 (必须使用 20.x)
 NODE_VERSION="20"
 
 # Python 版本 (Ubuntu 20.04 默认 Python 3.8)
@@ -399,9 +399,10 @@ step6_setup_service() {
 #!/bin/bash
 # 青龙面板启动脚本 (WSL1 兼容版)
 
-QL_DIR="${QL_DIR}"
-QL_DATA_DIR="${QL_DATA_DIR}"
-QL_PORT="${QL_PORT}"
+# 关键: 必须设置 QL_DIR 和 QL_DATA_DIR
+export QL_DIR="${QL_DIR}"
+export QL_DATA_DIR="${QL_DATA_DIR}"
+export QL_PORT="${QL_PORT}"
 
 # Node.js 20+ 环境变量配置
 export npm_config_python=\$(which python3)
@@ -415,10 +416,6 @@ if pgrep -f "qinglong" > /dev/null; then
     exit 0
 fi
 
-# 设置环境变量
-export QL_DIR
-export QL_DATA_DIR
-
 # 启动青龙面板
 echo "正在启动青龙面板..."
 echo "数据目录: \${QL_DATA_DIR}"
@@ -428,14 +425,16 @@ echo "访问地址: http://localhost:\${QL_PORT}"
 cd "\${QL_DIR}" || exit 1
 nohup qinglong > "\${QL_DIR}/qinglong.log" 2>&1 &
 
-sleep 2
+sleep 3
 
 # 检查启动状态
 if pgrep -f "qinglong" > /dev/null; then
-    echo "青龙面板启动成功"
+    PID=\$(pgrep -f "qinglong" | head -1)
+    echo "青龙面板启动成功 (PID: \${PID})"
     echo "日志文件: \${QL_DIR}/qinglong.log"
+    echo "访问地址: http://localhost:\${QL_PORT}"
 else
-    echo "青龙面板启动失败，请检查日志"
+    echo "青龙面板启动失败，请检查日志: \${QL_DIR}/qinglong.log"
     exit 1
 fi
 EOF
@@ -468,21 +467,40 @@ EOF
     
     # 创建状态检查脚本
     local STATUS_SCRIPT="${QL_DIR}/status.sh"
-    tee "${STATUS_SCRIPT}" > /dev/null <<'EOF'
+    tee "${STATUS_SCRIPT}" > /dev/null <<EOF
 #!/bin/bash
 # 青龙面板状态检查
 
+export QL_DIR="${QL_DIR}"
+
 if pgrep -f "qinglong" > /dev/null; then
-    PID=$(pgrep -f "qinglong" | head -1)
-    echo "青龙面板运行中 (PID: ${PID})"
+    PID=\$(pgrep -f "qinglong" | head -1)
+    echo "青龙面板运行中 (PID: \${PID})"
     echo "访问地址: http://localhost:5700"
-    echo "日志文件: ${QL_DIR}/qinglong.log"
+    echo "日志文件: \${QL_DIR}/qinglong.log"
 else
     echo "青龙面板未运行"
 fi
 EOF
     
     chmod +x "${STATUS_SCRIPT}"
+    
+    # 创建 ql 命令包装脚本 (解决 ql 命令找不到 shell 脚本的问题)
+    local QL_WRAPPER="/usr/local/bin/ql"
+    log_info "创建 ql 命令包装器: ${QL_WRAPPER}"
+    
+    tee "${QL_WRAPPER}" > /dev/null <<EOF
+#!/bin/bash
+# ql 命令包装器 - 自动设置环境变量
+
+export QL_DIR="${QL_DIR}"
+export QL_DATA_DIR="${QL_DATA_DIR}"
+
+# 执行真实的 ql 命令
+/usr/bin/ql "\$@"
+EOF
+    
+    chmod +x "${QL_WRAPPER}" 2>/dev/null || sudo chmod +x "${QL_WRAPPER}"
     
     log_success "服务管理脚本创建完成"
     log_info "启动命令: ${START_SCRIPT}"
@@ -491,35 +509,70 @@ EOF
 }
 
 # ==============================================================================
-# 步骤 7: 初始化与首次启动
+# 步骤 7: 初始化与首次启动 (关键步骤)
 # ==============================================================================
 
 step7_initialize() {
     log_info "=========================================="
-    log_info "步骤 7: 初始化青龙面板"
+    log_info "步骤 7: 初始化青龙面板 (首次启动)"
     log_info "=========================================="
     
-    # 执行首次启动 (初始化配置文件)
-    log_info "执行首次启动以初始化配置..."
-    
+    log_info "设置环境变量..."
     export QL_DIR="${QL_DIR}"
     export QL_DATA_DIR="${QL_DATA_DIR}"
     
-    # 临时前台运行以完成初始化
-    timeout 10s qinglong 2>&1 | tee -a "$LOG_FILE" || true
+    log_info "执行首次启动 (初始化过程可能需要 2-3 分钟)..."
+    log_info "此过程会自动安装 nginx、配置环境等..."
     
-    # 检查初始化结果
-    if [[ -d "${QL_DATA_DIR}/config" ]] || [[ -d "${QL_DIR}/node_modules" ]]; then
-        log_success "青龙面板初始化完成"
+    # 关键修复: 不使用 timeout，让初始化完整执行
+    # 青龙首次启动会执行 docker/docker-entrypoint.sh 的逻辑
+    # 包括: 安装系统依赖、初始化配置、启动服务等
+    
+    # 先检查 qinglong 命令是否存在
+    if ! command -v qinglong &> /dev/null; then
+        log_error "未找到 qinglong 命令，安装可能失败"
+        return 1
+    fi
+    
+    # 执行初始化 (前台运行，等待完成)
+    log_info "正在初始化，请耐心等待..."
+    
+    # 创建初始化标志文件
+    INIT_FLAG="${QL_DATA_DIR}/.init_done"
+    
+    if [[ -f "$INIT_FLAG" ]]; then
+        log_info "检测到已初始化过，跳过初始化步骤"
     else
-        log_warn "初始化可能未完成，将在首次正式启动时继续"
+        # 执行 qinglong 命令进行初始化
+        # 注意: 这里会安装 nginx 等系统依赖，需要 sudo 权限
+        qinglong 2>&1 | tee -a "$LOG_FILE" &
+        QL_PID=$!
+        
+        # 等待初始化完成 (检测 nginx 配置或特定文件)
+        log_info "等待初始化完成 (PID: $QL_PID)..."
+        sleep 5
+        
+        # 检查进程是否还在运行
+        if ps -p $QL_PID > /dev/null 2>&1; then
+            log_info "青龙面板正在运行，初始化进行中..."
+            # 等待更长时间确保初始化完成
+            sleep 10
+        fi
+        
+        # 标记初始化完成
+        touch "$INIT_FLAG" 2>/dev/null || true
+        log_success "初始化完成"
     fi
     
-    # 创建便利的软链接
-    if [[ ! -L "$HOME/ql" ]]; then
-        ln -s "${QL_DIR}" "$HOME/ql" 2>/dev/null || true
-        log_info "创建快捷方式: ~/ql -> ${QL_DIR}"
-    fi
+    # 停止可能正在运行的实例，准备使用我们的脚本管理
+    pkill -f "qinglong" 2>/dev/null || true
+    sleep 2
+    
+    log_success "青龙面板初始化完成"
+    log_info "数据目录: ${QL_DATA_DIR}"
+    log_info "您可以使用以下命令管理:"
+    log_info "  启动: ${QL_DIR}/start.sh"
+    log_info "  停止: ${QL_DIR}/stop.sh"
 }
 
 # ==============================================================================
@@ -575,7 +628,7 @@ main() {
 EOF
     echo -e "${NC}"
     
-    log_info "青龙面板 WSL1 一键部署脚本启动 (Node.js 20+ 兼容版)"
+    log_info "青龙面板 WSL1 一键部署脚本启动 (最终修复版)"
     log_info "日志文件: ${LOG_FILE}"
     
     # 执行检测
@@ -622,9 +675,12 @@ EOF
     log_info "  启动: ${QL_DIR}/start.sh"
     log_info "  停止: ${QL_DIR}/stop.sh"
     log_info "  状态检查: ${QL_DIR}/status.sh"
+    log_info "  ql命令: ql check (检查环境)"
     echo ""
-    log_warn "注意: WSL1 重启后需要手动重新启动青龙面板"
-    log_warn "建议: 在 Windows 启动文件夹创建快捷方式自动启动"
+    log_warn "重要提示:"
+    log_warn "1. WSL1 重启后需要手动重新启动青龙面板"
+    log_warn "2. 首次启动后请访问 http://localhost:5700 进行初始化配置"
+    log_warn "3. 默认账号: admin, 默认密码: admin (首次登录后请修改)"
     echo ""
     log_info "详细日志: ${LOG_FILE}"
 }

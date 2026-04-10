@@ -175,18 +175,9 @@ install_qinglong() {
     log_info "安装原生模块构建工具..."
     npm install -g node-gyp
     
-    # 安装必要的Node.js构建依赖
-    npm install -g node-pre-gyp
-    
-    # 使用pnpm安装青龙面板（更稳定）
-    log_info "使用pnpm安装青龙面板..."
-    pnpm add -g @whyour/qinglong@latest
-    
-    # 备用方案：如果pnpm安装失败，使用npm强制安装
-    if [ $? -ne 0 ]; then
-        log_warn "pnpm安装失败，尝试npm安装..."
-        npm install -g @whyour/qinglong@latest --force
-    fi
+    # 安装青龙面板（使用npm而不是pnpm）
+    log_info "使用npm安装青龙面板..."
+    npm install -g @whyour/qinglong@latest --force
     
     log_info "青龙面板安装完成"
 }

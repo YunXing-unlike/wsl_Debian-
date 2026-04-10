@@ -1,9 +1,10 @@
 #!/bin/bash
 # ==============================================================================
-# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本
-# 版本: 1.0.0
+# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本 (Node.js 20 兼容版)
+# 版本: 2.0.0
 # 适用环境: WSL1 (Windows Subsystem for Linux 1) + Ubuntu 20.04 LTS
 # 部署方式: 原生 NPM 安装 (非Docker方案)
+# 关键修复: Node.js 20+ 兼容性、node-pre-gyp 预安装、环境变量配置
 # ==============================================================================
 
 set -e  # 遇到错误立即退出
@@ -23,10 +24,10 @@ QL_PORT="${QL_PORT:-5700}"
 # 国内镜像源配置
 APT_MIRROR="https://mirrors.aliyun.com/ubuntu"
 NPM_REGISTRY="https://registry.npmmirror.com"
-PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn"
 
-# Node.js 版本 (使用 LTS 版本避免兼容性问题)
-NODE_VERSION="18"  # 使用 Node.js 18 LTS 而非 20，避免 disturl 报错
+# Node.js 版本 (必须使用 20.18.1+ 以满足 undici@7 要求)
+NODE_VERSION="20"
 
 # Python 版本 (Ubuntu 20.04 默认 Python 3.8)
 PYTHON_VERSION="3.8"
@@ -133,8 +134,8 @@ EOF
     log_info "更新 APT 包列表..."
     sudo apt-get update -y | tee -a "$LOG_FILE"
     
-    # 安装基础工具
-    log_info "安装基础系统工具..."
+    # 安装基础工具 (包含编译工具以支持 node-gyp)
+    log_info "安装基础系统工具及编译依赖..."
     sudo apt-get install -y \
         curl \
         wget \
@@ -150,6 +151,7 @@ EOF
         libssl-dev \
         libffi-dev \
         python3-dev \
+        python3-distutils \
         2>&1 | tee -a "$LOG_FILE"
     
     # 设置时区为 Asia/Shanghai
@@ -161,36 +163,48 @@ EOF
 }
 
 # ==============================================================================
-# 步骤 2: Node.js 环境安装 (处理 disturl 兼容性问题)
+# 步骤 2: Node.js 环境安装 (Node.js 20+ 强制版本)
 # ==============================================================================
 
 step2_install_nodejs() {
     log_info "=========================================="
-    log_info "步骤 2: Node.js 环境安装"
+    log_info "步骤 2: Node.js 环境安装 (必须使用 20.x)"
     log_info "=========================================="
     
     # 检查是否已安装 Node.js
     if command -v node &> /dev/null; then
         CURRENT_NODE=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-        log_warn "检测到已安装 Node.js $(node --version)"
-        if [[ "$CURRENT_NODE" -ge 20 ]]; then
-            log_warn "Node.js 20+ 可能存在 disturl 兼容性问题，建议降级到 18 LTS"
-            read -p "是否重新安装 Node.js ${NODE_VERSION}.x? (y/N): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                uninstall_nodejs
+        CURRENT_NODE_FULL=$(node --version)
+        log_warn "检测到已安装 Node.js ${CURRENT_NODE_FULL}"
+        
+        # 检查版本是否为 20.x
+        if [[ "$CURRENT_NODE" -lt 20 ]]; then
+            log_error "青龙面板要求 Node.js >= 20.18.1，当前版本 ${CURRENT_NODE_FULL} 不满足要求"
+            log_info "正在升级 Node.js 到 20.x..."
+            uninstall_nodejs
+        elif [[ "$CURRENT_NODE" -eq 20 ]]; then
+            # 检查小版本是否 >= 18.1
+            MINOR=$(node --version | cut -d'v' -f2 | cut -d'.' -f2)
+            PATCH=$(node --version | cut -d'v' -f2 | cut -d'.' -f3)
+            if [[ "$MINOR" -lt 18 ]] || ([[ "$MINOR" -eq 18 ]] && [[ "$PATCH" -lt 1 ]]); then
+                log_warn "Node.js 版本 ${CURRENT_NODE_FULL} 低于 20.18.1，建议升级"
+                read -p "是否升级 Node.js 到最新 20.x? (Y/n): " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                    uninstall_nodejs
+                fi
             else
-                log_info "保留现有 Node.js 版本，继续安装..."
+                log_success "Node.js 版本符合要求 (>= 20.18.1)"
                 return 0
             fi
         else
-            log_success "Node.js 版本符合要求"
+            log_success "Node.js 版本 ${CURRENT_NODE_FULL} 应该兼容"
             return 0
         fi
     fi
     
-    # 使用 Nodesource 官方脚本安装指定版本 (避免 disturl 问题)
-    log_info "通过 NodeSource 安装 Node.js ${NODE_VERSION}.x LTS..."
+    # 使用 Nodesource 官方脚本安装 Node.js 20.x
+    log_info "通过 NodeSource 安装 Node.js ${NODE_VERSION}.x..."
     
     # 清理可能存在的旧配置
     sudo rm -f /etc/apt/sources.list.d/nodesource.list*
@@ -207,17 +221,11 @@ step2_install_nodejs() {
     log_success "Node.js ${NODE_VER} 安装成功"
     log_success "npm ${NPM_VER} 安装成功"
     
-    # 关键修复: 配置 npm 避免 disturl 错误 (Node.js 20 已废弃该选项)
-    log_info "配置 npm 镜像与兼容性选项..."
+    # Node.js 20+ 配置: 废弃 npm config set，改用环境变量
+    log_info "配置 npm 镜像 (Node.js 20+ 兼容方式)..."
     
-    # 使用新的配置方式替代废弃的 disturl
+    # 仅设置 registry，不设置已废弃的 node_gyp 和 disturl
     npm config set registry "${NPM_REGISTRY}"
-    
-    # 对于可能需要编译原生模块的包，配置 node-gyp 使用国内镜像
-    npm config set disturl "https://npmmirror.com/dist" 2>/dev/null || log_warn "disturl 设置被忽略 (Node.js 20+ 已移除该选项)"
-    
-    # 配置 node-gyp 使用国内镜像
-    npm config set node_gyp "https://cdn.npmmirror.com/binaries/node-gyp"
     
     # 禁用 package-lock 以减少潜在冲突
     npm config set package-lock false
@@ -230,6 +238,7 @@ uninstall_nodejs() {
     sudo apt-get remove -y nodejs npm 2>/dev/null || true
     sudo apt-get autoremove -y 2>/dev/null || true
     sudo rm -rf /etc/apt/sources.list.d/nodesource.list*
+    sudo rm -rf /usr/lib/node_modules/npm
 }
 
 # ==============================================================================
@@ -255,7 +264,7 @@ step3_install_python() {
     
     # 确保 pip 已安装并升级到最新版
     log_info "安装/升级 pip..."
-    sudo apt-get install -y python3-pip | tee -a "$LOG_FILE"
+    sudo apt-get install -y python3-pip python3-distutils | tee -a "$LOG_FILE"
     
     # 升级 pip 并配置国内镜像
     python3 -m pip install --upgrade pip --index-url "${PIP_INDEX}" 2>&1 | tee -a "$LOG_FILE"
@@ -272,43 +281,38 @@ use-mirrors = true
 mirrors = https://pypi.tuna.tsinghua.edu.cn
 EOF
     
-    # 安装青龙面板常用的 Python 依赖 (预安装以加速后续使用)
-    log_info "预安装常用 Python 依赖包..."
-    python3 -m pip install \
-        requests \
-        aiohttp \
-        canvas \
-        ping3 \
-        jieba \
-        PyExecJS \
-        pycryptodome \
-        --index-url "${PIP_INDEX}" 2>&1 | tee -a "$LOG_FILE" || log_warn "部分 Python 依赖安装失败，青龙面板启动后会自动重试"
+    # 安装 node-gyp 所需的 Python 配置
+    log_info "配置 node-gyp Python 路径..."
+    export npm_config_python=$(which python3)
     
     log_success "Python 环境配置完成"
 }
 
 # ==============================================================================
-# 步骤 4: 安装 pnpm (青龙面板依赖)
+# 步骤 4: 安装 pnpm 和 node-pre-gyp (青龙面板依赖)
 # ==============================================================================
 
 step4_install_pnpm() {
     log_info "=========================================="
-    log_info "步骤 4: 安装 pnpm 包管理器"
+    log_info "步骤 4: 安装 pnpm 和 node-pre-gyp"
     log_info "=========================================="
+    
+    # 先安装 node-pre-gyp (青龙面板官方要求)
+    log_info "安装 node-pre-gyp (青龙面板依赖)..."
+    npm install -g node-pre-gyp --registry="${NPM_REGISTRY}" 2>&1 | tee -a "$LOG_FILE"
     
     # 检查是否已安装 pnpm
     if command -v pnpm &> /dev/null; then
         PNPM_VER=$(pnpm --version)
         log_success "检测到 pnpm ${PNPM_VER}"
-        return 0
+    else
+        # 使用 npm 安装 pnpm 8.3.1 (青龙官方推荐版本)
+        log_info "通过 npm 安装 pnpm@8.3.1..."
+        npm install -g pnpm@8.3.1 --registry="${NPM_REGISTRY}" 2>&1 | tee -a "$LOG_FILE"
     fi
     
-    # 使用 npm 安装 pnpm (使用国内镜像加速)
-    log_info "通过 npm 安装 pnpm..."
-    npm install -g pnpm --registry="${NPM_REGISTRY}" 2>&1 | tee -a "$LOG_FILE"
-    
     # 配置 pnpm 使用国内镜像
-    pnpm config set registry "${NPM_REGISTRY}"
+    pnpm config set registry "${NPM_REGISTRY}" 2>/dev/null || true
     
     # 添加到 PATH (针对 WSL 环境)
     if ! grep -q "pnpm" ~/.bashrc 2>/dev/null; then
@@ -316,11 +320,11 @@ step4_install_pnpm() {
         log_info "已将 pnpm 添加到 ~/.bashrc PATH"
     fi
     
-    log_success "pnpm 安装完成"
+    log_success "pnpm 和 node-pre-gyp 安装完成"
 }
 
 # ==============================================================================
-# 步骤 5: 青龙面板安装
+# 步骤 5: 青龙面板安装 (使用环境变量替代废弃的 npm config)
 # ==============================================================================
 
 step5_install_qinglong() {
@@ -342,6 +346,23 @@ step5_install_qinglong() {
         echo "export QL_DATA_DIR=\"${QL_DATA_DIR}\"" >> ~/.bashrc
         log_info "已持久化 QL_DIR 和 QL_DATA_DIR 到 ~/.bashrc"
     fi
+    
+    # Node.js 20+ 关键修复: 使用环境变量替代废弃的 npm config set node_gyp
+    log_info "配置 node-gyp 环境变量 (Node.js 20+ 兼容方式)..."
+    
+    # 设置 Python 路径环境变量 (替代 npm config set python)
+    export npm_config_python=$(which python3)
+    
+    # 设置 node-gyp 使用国内镜像 (替代废弃的 npm config set node_gyp)
+    export npm_config_node_gyp="https://cdn.npmmirror.com/binaries/node-gyp"
+    
+    # 设置二进制包镜像源 (关键: 避免从 GitHub 下载)
+    export npm_config_canvas_binary_host_mirror="https://registry.npmmirror.com/-/binary/canvas"
+    export npm_config_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/sqlite3"
+    export npm_config_sass_binary_site="https://registry.npmmirror.com/-/binary/node-sass"
+    export npm_config_phantomjs_cdnurl="https://registry.npmmirror.com/-/binary/phantomjs"
+    export npm_config_electron_mirror="https://registry.npmmirror.com/-/binary/electron/"
+    export npm_config_puppeteer_download_host="https://registry.npmmirror.com/-/binary"
     
     # 使用 npm 全局安装青龙面板
     log_info "正在安装青龙面板 (@whyour/qinglong)，这可能需要几分钟..."
@@ -370,17 +391,23 @@ step6_setup_service() {
     log_info "步骤 6: 配置服务管理 (WSL1 兼容方案)"
     log_info "=========================================="
     
-    # 创建启动脚本
+    # 创建启动脚本 (包含 Node.js 20+ 环境变量)
     local START_SCRIPT="${QL_DIR}/start.sh"
     log_info "创建启动脚本: ${START_SCRIPT}"
     
-    tee "${START_SCRIPT}" > /dev/null <<'EOF'
+    tee "${START_SCRIPT}" > /dev/null <<EOF
 #!/bin/bash
 # 青龙面板启动脚本 (WSL1 兼容版)
 
-QL_DIR="${QL_DIR:-$HOME/qinglong}"
-QL_DATA_DIR="${QL_DATA_DIR:-$QL_DIR/data}"
-QL_PORT="${QL_PORT:-5700}"
+QL_DIR="${QL_DIR}"
+QL_DATA_DIR="${QL_DATA_DIR}"
+QL_PORT="${QL_PORT}"
+
+# Node.js 20+ 环境变量配置
+export npm_config_python=\$(which python3)
+export npm_config_node_gyp="https://cdn.npmmirror.com/binaries/node-gyp"
+export npm_config_canvas_binary_host_mirror="https://registry.npmmirror.com/-/binary/canvas"
+export npm_config_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/sqlite3"
 
 # 检查是否已在运行
 if pgrep -f "qinglong" > /dev/null; then
@@ -394,19 +421,19 @@ export QL_DATA_DIR
 
 # 启动青龙面板
 echo "正在启动青龙面板..."
-echo "数据目录: ${QL_DATA_DIR}"
-echo "访问地址: http://localhost:${QL_PORT}"
+echo "数据目录: \${QL_DATA_DIR}"
+echo "访问地址: http://localhost:\${QL_PORT}"
 
 # 使用 nohup 后台运行
-cd "${QL_DIR}" || exit 1
-nohup qinglong > "${QL_DIR}/qinglong.log" 2>&1 &
+cd "\${QL_DIR}" || exit 1
+nohup qinglong > "\${QL_DIR}/qinglong.log" 2>&1 &
 
 sleep 2
 
 # 检查启动状态
 if pgrep -f "qinglong" > /dev/null; then
     echo "青龙面板启动成功"
-    echo "日志文件: ${QL_DIR}/qinglong.log"
+    echo "日志文件: \${QL_DIR}/qinglong.log"
 else
     echo "青龙面板启动失败，请检查日志"
     exit 1
@@ -456,16 +483,6 @@ fi
 EOF
     
     chmod +x "${STATUS_SCRIPT}"
-    
-    # 创建 Windows 批处理文件辅助脚本 (可选)
-    local WIN_HELPER="${QL_DIR}/ql.bat"
-    tee "${WIN_HELPER}" > /dev/null <<EOF
-@echo off
-REM Windows 批处理辅助脚本，用于在 WSL 中管理青龙面板
-REM 将此文件复制到 Windows 桌面或 PATH 目录中使用
-
-wsl bash ${START_SCRIPT}
-EOF
     
     log_success "服务管理脚本创建完成"
     log_info "启动命令: ${START_SCRIPT}"
@@ -558,7 +575,7 @@ main() {
 EOF
     echo -e "${NC}"
     
-    log_info "青龙面板 WSL1 一键部署脚本启动"
+    log_info "青龙面板 WSL1 一键部署脚本启动 (Node.js 20+ 兼容版)"
     log_info "日志文件: ${LOG_FILE}"
     
     # 执行检测
@@ -604,10 +621,7 @@ EOF
     log_info "管理命令:"
     log_info "  启动: ${QL_DIR}/start.sh"
     log_info "  停止: ${QL_DIR}/stop.sh"
-    log_info "  状态: ${QL_DIR}/status.sh"
-    echo ""
-    log_info "启动面板:"
-    log_info "  bash ${QL_DIR}/start.sh"
+    log_info "  状态检查: ${QL_DIR}/status.sh"
     echo ""
     log_warn "注意: WSL1 重启后需要手动重新启动青龙面板"
     log_warn "建议: 在 Windows 启动文件夹创建快捷方式自动启动"

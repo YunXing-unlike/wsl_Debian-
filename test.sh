@@ -1,163 +1,622 @@
 #!/bin/bash
-# ==============================================================
-# QingLong Panel Backend One-Click Deploy Script
-# Environment: WSL1 + Ubuntu 20.04 (No Docker, No Systemd)
-# Function: Auto deploy qinglong backend, fix node20 npm error
-# Author: Professional Script
-# ==============================================================
+# ==============================================================================
+# 青龙面板 WSL1 Ubuntu 20.04 一键部署脚本
+# 版本: 1.0.0
+# 适用环境: WSL1 (Windows Subsystem for Linux 1) + Ubuntu 20.04 LTS
+# 部署方式: 原生 NPM 安装 (非Docker方案)
+# ==============================================================================
 
-# 脚本严格模式：遇到错误立即退出，未定义变量报错，管道失败终止
-set -euo pipefail
+set -e  # 遇到错误立即退出
+set -u  # 使用未定义变量时报错
 
-# ===================== 基础配置（可自定义） =====================
-# 青龙安装目录
-QL_DIR="/opt/qinglong"
-# 青龙数据目录
-QL_DATA_DIR="/opt/qinglong/data"
-# 青龙端口
-QL_PORT=5700
+# ==============================================================================
+# 配置区 - 用户可自定义变量
+# ==============================================================================
+
+# 青龙面板安装目录
+QL_DIR="${QL_DIR:-$HOME/qinglong}"
+QL_DATA_DIR="${QL_DATA_DIR:-$QL_DIR/data}"
+
+# 服务端口
+QL_PORT="${QL_PORT:-5700}"
+
 # 国内镜像源配置
-APT_MIRROR="mirrors.aliyun.com"
-PIP_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
-NPM_MIRROR="https://registry.npmmirror.com"
-# =================================================================
+APT_MIRROR="https://mirrors.aliyun.com/ubuntu"
+NPM_REGISTRY="https://registry.npmmirror.com"
+PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
 
-# ===================== 权限检查 =====================
-check_root() {
-    if [ $(id -u) -ne 0 ]; then
-        echo -e "\033[31m错误：请使用 root 用户运行此脚本！\033[0m"
-        exit 1
+# Node.js 版本 (使用 LTS 版本避免兼容性问题)
+NODE_VERSION="18"  # 使用 Node.js 18 LTS 而非 20，避免 disturl 报错
+
+# Python 版本 (Ubuntu 20.04 默认 Python 3.8)
+PYTHON_VERSION="3.8"
+
+# 日志文件
+LOG_FILE="/tmp/qinglong_install_$(date +%Y%m%d_%H%M%S).log"
+
+# ==============================================================================
+# 颜色定义
+# ==============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ==============================================================================
+# 日志函数
+# ==============================================================================
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
+}
+
+# ==============================================================================
+# 系统检测函数
+# ==============================================================================
+
+check_wsl1() {
+    log_info "检测 WSL 环境..."
+    
+    if ! grep -q "microsoft" /proc/version 2>/dev/null && ! grep -q "Microsoft" /proc/version 2>/dev/null; then
+        log_warn "未检测到 WSL 环境，但脚本将继续执行"
+    else
+        log_success "检测到 WSL 环境"
+        if grep -q "WSL2" /proc/version 2>/dev/null; then
+            log_warn "检测到 WSL2，本脚本为 WSL1 优化，但通常兼容 WSL2"
+        else
+            log_success "确认 WSL1 环境"
+        fi
+    fi
+    
+    # 检测 Ubuntu 版本
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        log_info "操作系统: $NAME $VERSION_ID"
+        if [[ "$VERSION_ID" != "20.04" ]]; then
+            log_warn "当前系统版本为 $VERSION_ID，脚本为 20.04 优化，可能兼容其他版本"
+        fi
     fi
 }
 
-# ===================== 更换APT国内源 =====================
-change_apt_source() {
-    echo -e "\033[32m[1/7] 更换Ubuntu APT国内镜像源...\033[0m"
-    cp /etc/apt/sources.list /etc/apt/sources.list.bak
-    cat > /etc/apt/sources.list << EOF
-deb http://${APT_MIRROR}/ubuntu/ focal main restricted universe multiverse
-deb http://${APT_MIRROR}/ubuntu/ focal-updates main restricted universe multiverse
-deb http://${APT_MIRROR}/ubuntu/ focal-backports main restricted universe multiverse
-deb http://${APT_MIRROR}/ubuntu/ focal-security main restricted universe multiverse
+check_systemd() {
+    log_info "检测系统服务管理器..."
+    
+    # WSL1 不支持 systemd，检测是否可用
+    if command -v systemctl &> /dev/null && systemctl --version &> /dev/null; then
+        log_warn "检测到 systemd 可用，但 WSL1 环境建议使用直接进程管理"
+        USE_SYSTEMD=true
+    else
+        log_info "未检测到 systemd (符合 WSL1 特征)，将使用进程管理方案"
+        USE_SYSTEMD=false
+    fi
+}
+
+# ==============================================================================
+# 步骤 1: 系统初始化与镜像源配置
+# ==============================================================================
+
+step1_system_init() {
+    log_info "=========================================="
+    log_info "步骤 1: 系统初始化与镜像源配置"
+    log_info "=========================================="
+    
+    # 备份原配置
+    if [[ -f /etc/apt/sources.list && ! -f /etc/apt/sources.list.bak ]]; then
+        sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+        log_info "已备份原 APT 源配置"
+    fi
+    
+    # 配置阿里云镜像源 (针对 Ubuntu 20.04 Focal)
+    log_info "配置阿里云 APT 镜像源..."
+    sudo tee /etc/apt/sources.list > /dev/null <<EOF
+deb ${APT_MIRROR} focal main restricted universe multiverse
+deb ${APT_MIRROR} focal-updates main restricted universe multiverse
+deb ${APT_MIRROR} focal-backports main restricted universe multiverse
+deb ${APT_MIRROR} focal-security main restricted universe multiverse
 EOF
-    apt update -y && apt upgrade -y
+    
+    # 更新包列表
+    log_info "更新 APT 包列表..."
+    sudo apt-get update -y | tee -a "$LOG_FILE"
+    
+    # 安装基础工具
+    log_info "安装基础系统工具..."
+    sudo apt-get install -y \
+        curl \
+        wget \
+        git \
+        vim \
+        nano \
+        tzdata \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        software-properties-common \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-dev \
+        2>&1 | tee -a "$LOG_FILE"
+    
+    # 设置时区为 Asia/Shanghai
+    log_info "设置系统时区为 Asia/Shanghai..."
+    sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || \
+    sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+    
+    log_success "系统初始化完成"
 }
 
-# ===================== 安装系统基础依赖 =====================
-install_base_deps() {
-    echo -e "\033[32m[2/7] 安装系统基础依赖...\033[0m"
-    apt install -y \
-        git curl wget build-essential libssl-dev \
-        python3 python3-pip python3-dev \
-        screen unzip zip net-tools
+# ==============================================================================
+# 步骤 2: Node.js 环境安装 (处理 disturl 兼容性问题)
+# ==============================================================================
+
+step2_install_nodejs() {
+    log_info "=========================================="
+    log_info "步骤 2: Node.js 环境安装"
+    log_info "=========================================="
+    
+    # 检查是否已安装 Node.js
+    if command -v node &> /dev/null; then
+        CURRENT_NODE=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
+        log_warn "检测到已安装 Node.js $(node --version)"
+        if [[ "$CURRENT_NODE" -ge 20 ]]; then
+            log_warn "Node.js 20+ 可能存在 disturl 兼容性问题，建议降级到 18 LTS"
+            read -p "是否重新安装 Node.js ${NODE_VERSION}.x? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                uninstall_nodejs
+            else
+                log_info "保留现有 Node.js 版本，继续安装..."
+                return 0
+            fi
+        else
+            log_success "Node.js 版本符合要求"
+            return 0
+        fi
+    fi
+    
+    # 使用 Nodesource 官方脚本安装指定版本 (避免 disturl 问题)
+    log_info "通过 NodeSource 安装 Node.js ${NODE_VERSION}.x LTS..."
+    
+    # 清理可能存在的旧配置
+    sudo rm -f /etc/apt/sources.list.d/nodesource.list*
+    
+    # 下载并执行 NodeSource 安装脚本
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | sudo -E bash - | tee -a "$LOG_FILE"
+    
+    # 安装 Node.js
+    sudo apt-get install -y nodejs | tee -a "$LOG_FILE"
+    
+    # 验证安装
+    NODE_VER=$(node --version)
+    NPM_VER=$(npm --version)
+    log_success "Node.js ${NODE_VER} 安装成功"
+    log_success "npm ${NPM_VER} 安装成功"
+    
+    # 关键修复: 配置 npm 避免 disturl 错误 (Node.js 20 已废弃该选项)
+    log_info "配置 npm 镜像与兼容性选项..."
+    
+    # 使用新的配置方式替代废弃的 disturl
+    npm config set registry "${NPM_REGISTRY}"
+    
+    # 对于可能需要编译原生模块的包，配置 node-gyp 使用国内镜像
+    npm config set disturl "https://npmmirror.com/dist" 2>/dev/null || log_warn "disturl 设置被忽略 (Node.js 20+ 已移除该选项)"
+    
+    # 配置 node-gyp 使用国内镜像
+    npm config set node_gyp "https://cdn.npmmirror.com/binaries/node-gyp"
+    
+    # 禁用 package-lock 以减少潜在冲突
+    npm config set package-lock false
+    
+    log_success "npm 镜像配置完成"
 }
 
-# ===================== 更换PIP国内源 =====================
-change_pip_source() {
-    echo -e "\033[32m[3/7] 配置PIP国内镜像源...\033[0m"
+uninstall_nodejs() {
+    log_info "卸载现有 Node.js..."
+    sudo apt-get remove -y nodejs npm 2>/dev/null || true
+    sudo apt-get autoremove -y 2>/dev/null || true
+    sudo rm -rf /etc/apt/sources.list.d/nodesource.list*
+}
+
+# ==============================================================================
+# 步骤 3: Python 环境配置
+# ==============================================================================
+
+step3_install_python() {
+    log_info "=========================================="
+    log_info "步骤 3: Python 环境配置"
+    log_info "=========================================="
+    
+    # Ubuntu 20.04 默认包含 Python 3.8，确保 pip 已安装
+    log_info "检查 Python 环境..."
+    
+    PYTHON_CMD=$(command -v python3 || command -v python)
+    if [[ -z "$PYTHON_CMD" ]]; then
+        log_error "未检测到 Python，尝试安装..."
+        sudo apt-get install -y python3 python3-pip python3-venv | tee -a "$LOG_FILE"
+    else
+        PYTHON_VER=$($PYTHON_CMD --version 2>&1)
+        log_success "检测到 ${PYTHON_VER}"
+    fi
+    
+    # 确保 pip 已安装并升级到最新版
+    log_info "安装/升级 pip..."
+    sudo apt-get install -y python3-pip | tee -a "$LOG_FILE"
+    
+    # 升级 pip 并配置国内镜像
+    python3 -m pip install --upgrade pip --index-url "${PIP_INDEX}" 2>&1 | tee -a "$LOG_FILE"
+    
+    # 配置 pip 使用清华镜像
     mkdir -p ~/.pip
-    cat > ~/.pip/pip.conf << EOF
+    tee ~/.pip/pip.conf > /dev/null <<EOF
 [global]
-index-url = ${PIP_MIRROR}
+index-url = ${PIP_INDEX}
 trusted-host = pypi.tuna.tsinghua.edu.cn
+
+[install]
+use-mirrors = true
+mirrors = https://pypi.tuna.tsinghua.edu.cn
 EOF
-    pip3 install --upgrade pip
+    
+    # 安装青龙面板常用的 Python 依赖 (预安装以加速后续使用)
+    log_info "预安装常用 Python 依赖包..."
+    python3 -m pip install \
+        requests \
+        aiohttp \
+        canvas \
+        ping3 \
+        jieba \
+        PyExecJS \
+        pycryptodome \
+        --index-url "${PIP_INDEX}" 2>&1 | tee -a "$LOG_FILE" || log_warn "部分 Python 依赖安装失败，青龙面板启动后会自动重试"
+    
+    log_success "Python 环境配置完成"
 }
 
-# ===================== 安装Node.js 20.x + 修复NPM报错 =====================
-install_node() {
-    echo -e "\033[32m[4/7] 安装Node.js 20.x + 修复NPM disturl错误...\033[0m"
-    # 安装Node20官方源
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
-    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-    apt update -y && apt install -y nodejs
+# ==============================================================================
+# 步骤 4: 安装 pnpm (青龙面板依赖)
+# ==============================================================================
 
-    # 核心修复：解决 Node20 npm error: disturl is not a valid npm option
-    echo -e "\033[32m修复NPM不兼容的disturl配置...\033[0m"
-    npm config delete disturl || true
-    npm config set registry ${NPM_MIRROR}
-    npm install -g npm@latest
+step4_install_pnpm() {
+    log_info "=========================================="
+    log_info "步骤 4: 安装 pnpm 包管理器"
+    log_info "=========================================="
+    
+    # 检查是否已安装 pnpm
+    if command -v pnpm &> /dev/null; then
+        PNPM_VER=$(pnpm --version)
+        log_success "检测到 pnpm ${PNPM_VER}"
+        return 0
+    fi
+    
+    # 使用 npm 安装 pnpm (使用国内镜像加速)
+    log_info "通过 npm 安装 pnpm..."
+    npm install -g pnpm --registry="${NPM_REGISTRY}" 2>&1 | tee -a "$LOG_FILE"
+    
+    # 配置 pnpm 使用国内镜像
+    pnpm config set registry "${NPM_REGISTRY}"
+    
+    # 添加到 PATH (针对 WSL 环境)
+    if ! grep -q "pnpm" ~/.bashrc 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/share/pnpm:$PATH"' >> ~/.bashrc
+        log_info "已将 pnpm 添加到 ~/.bashrc PATH"
+    fi
+    
+    log_success "pnpm 安装完成"
 }
 
-# ===================== 全局安装青龙面板 =====================
-install_qinglong() {
-    echo -e "\033[32m[5/7] 全局安装青龙面板后端...\033[0m"
-    # 创建工作目录
-    mkdir -p ${QL_DIR} ${QL_DATA_DIR}
-    # 全局安装青龙
-    npm install -g @whyour/qinglong
-    # 永久配置青龙环境变量
-    echo "export QL_DIR=${QL_DIR}" >> /etc/profile
-    echo "export QL_DATA_DIR=${QL_DATA_DIR}" >> /etc/profile
-    echo "export QL_PORT=${QL_PORT}" >> /etc/profile
-    source /etc/profile
+# ==============================================================================
+# 步骤 5: 青龙面板安装
+# ==============================================================================
+
+step5_install_qinglong() {
+    log_info "=========================================="
+    log_info "步骤 5: 安装青龙面板"
+    log_info "=========================================="
+    
+    # 创建数据目录
+    log_info "创建青龙面板数据目录: ${QL_DATA_DIR}"
+    mkdir -p "${QL_DATA_DIR}"
+    
+    # 设置环境变量 (供青龙面板使用)
+    export QL_DIR="${QL_DIR}"
+    export QL_DATA_DIR="${QL_DATA_DIR}"
+    
+    # 持久化环境变量到 .bashrc
+    if ! grep -q "QL_DIR=" ~/.bashrc; then
+        echo "export QL_DIR=\"${QL_DIR}\"" >> ~/.bashrc
+        echo "export QL_DATA_DIR=\"${QL_DATA_DIR}\"" >> ~/.bashrc
+        log_info "已持久化 QL_DIR 和 QL_DATA_DIR 到 ~/.bashrc"
+    fi
+    
+    # 使用 npm 全局安装青龙面板
+    log_info "正在安装青龙面板 (@whyour/qinglong)，这可能需要几分钟..."
+    
+    # 使用 --unsafe-perm 避免权限问题，使用国内镜像加速
+    npm install -g @whyour/qinglong \
+        --registry="${NPM_REGISTRY}" \
+        --unsafe-perm \
+        2>&1 | tee -a "$LOG_FILE"
+    
+    # 验证安装
+    if command -v qinglong &> /dev/null || npm list -g @whyour/qinglong &> /dev/null; then
+        log_success "青龙面板安装成功"
+    else
+        log_error "青龙面板安装可能失败，请检查日志"
+        return 1
+    fi
 }
 
-# ===================== 安装PM2进程守护（替代systemd） =====================
-install_pm2() {
-    echo -e "\033[32m[6/7] 安装PM2进程守护（WSL1无systemd）...\033[0m"
-    npm install -g pm2
-    # 设置PM2开机自启（WSL1兼容方案）
-    pm2 startup
+# ==============================================================================
+# 步骤 6: WSL1 服务管理配置 (替代 systemd)
+# ==============================================================================
+
+step6_setup_service() {
+    log_info "=========================================="
+    log_info "步骤 6: 配置服务管理 (WSL1 兼容方案)"
+    log_info "=========================================="
+    
+    # 创建启动脚本
+    local START_SCRIPT="${QL_DIR}/start.sh"
+    log_info "创建启动脚本: ${START_SCRIPT}"
+    
+    tee "${START_SCRIPT}" > /dev/null <<'EOF'
+#!/bin/bash
+# 青龙面板启动脚本 (WSL1 兼容版)
+
+QL_DIR="${QL_DIR:-$HOME/qinglong}"
+QL_DATA_DIR="${QL_DATA_DIR:-$QL_DIR/data}"
+QL_PORT="${QL_PORT:-5700}"
+
+# 检查是否已在运行
+if pgrep -f "qinglong" > /dev/null; then
+    echo "青龙面板已在运行"
+    exit 0
+fi
+
+# 设置环境变量
+export QL_DIR
+export QL_DATA_DIR
+
+# 启动青龙面板
+echo "正在启动青龙面板..."
+echo "数据目录: ${QL_DATA_DIR}"
+echo "访问地址: http://localhost:${QL_PORT}"
+
+# 使用 nohup 后台运行
+cd "${QL_DIR}" || exit 1
+nohup qinglong > "${QL_DIR}/qinglong.log" 2>&1 &
+
+sleep 2
+
+# 检查启动状态
+if pgrep -f "qinglong" > /dev/null; then
+    echo "青龙面板启动成功"
+    echo "日志文件: ${QL_DIR}/qinglong.log"
+else
+    echo "青龙面板启动失败，请检查日志"
+    exit 1
+fi
+EOF
+    
+    chmod +x "${START_SCRIPT}"
+    
+    # 创建停止脚本
+    local STOP_SCRIPT="${QL_DIR}/stop.sh"
+    log_info "创建停止脚本: ${STOP_SCRIPT}"
+    
+    tee "${STOP_SCRIPT}" > /dev/null <<'EOF'
+#!/bin/bash
+# 青龙面板停止脚本
+
+if pgrep -f "qinglong" > /dev/null; then
+    echo "正在停止青龙面板..."
+    pkill -f "qinglong"
+    sleep 1
+    if pgrep -f "qinglong" > /dev/null; then
+        echo "强制终止..."
+        pkill -9 -f "qinglong"
+    fi
+    echo "青龙面板已停止"
+else
+    echo "青龙面板未在运行"
+fi
+EOF
+    
+    chmod +x "${STOP_SCRIPT}"
+    
+    # 创建状态检查脚本
+    local STATUS_SCRIPT="${QL_DIR}/status.sh"
+    tee "${STATUS_SCRIPT}" > /dev/null <<'EOF'
+#!/bin/bash
+# 青龙面板状态检查
+
+if pgrep -f "qinglong" > /dev/null; then
+    PID=$(pgrep -f "qinglong" | head -1)
+    echo "青龙面板运行中 (PID: ${PID})"
+    echo "访问地址: http://localhost:5700"
+    echo "日志文件: ${QL_DIR}/qinglong.log"
+else
+    echo "青龙面板未运行"
+fi
+EOF
+    
+    chmod +x "${STATUS_SCRIPT}"
+    
+    # 创建 Windows 批处理文件辅助脚本 (可选)
+    local WIN_HELPER="${QL_DIR}/ql.bat"
+    tee "${WIN_HELPER}" > /dev/null <<EOF
+@echo off
+REM Windows 批处理辅助脚本，用于在 WSL 中管理青龙面板
+REM 将此文件复制到 Windows 桌面或 PATH 目录中使用
+
+wsl bash ${START_SCRIPT}
+EOF
+    
+    log_success "服务管理脚本创建完成"
+    log_info "启动命令: ${START_SCRIPT}"
+    log_info "停止命令: ${STOP_SCRIPT}"
+    log_info "状态检查: ${STATUS_SCRIPT}"
 }
 
-# ===================== 启动青龙服务 =====================
-start_qinglong() {
-    echo -e "\033[32m[7/7] 启动青龙面板后端服务...\033[0m"
-    # 停止可能存在的旧进程
-    pkill -f qinglong || true
-    pm2 delete qinglong || true
-    # 后台启动青龙
-    cd ${QL_DIR}
-    nohup qinglong > /var/log/qinglong.log 2>&1 &
-    # PM2守护进程
-    pm2 start "qinglong" --name qinglong
-    pm2 save
-    sleep 3
+# ==============================================================================
+# 步骤 7: 初始化与首次启动
+# ==============================================================================
+
+step7_initialize() {
+    log_info "=========================================="
+    log_info "步骤 7: 初始化青龙面板"
+    log_info "=========================================="
+    
+    # 执行首次启动 (初始化配置文件)
+    log_info "执行首次启动以初始化配置..."
+    
+    export QL_DIR="${QL_DIR}"
+    export QL_DATA_DIR="${QL_DATA_DIR}"
+    
+    # 临时前台运行以完成初始化
+    timeout 10s qinglong 2>&1 | tee -a "$LOG_FILE" || true
+    
+    # 检查初始化结果
+    if [[ -d "${QL_DATA_DIR}/config" ]] || [[ -d "${QL_DIR}/node_modules" ]]; then
+        log_success "青龙面板初始化完成"
+    else
+        log_warn "初始化可能未完成，将在首次正式启动时继续"
+    fi
+    
+    # 创建便利的软链接
+    if [[ ! -L "$HOME/ql" ]]; then
+        ln -s "${QL_DIR}" "$HOME/ql" 2>/dev/null || true
+        log_info "创建快捷方式: ~/ql -> ${QL_DIR}"
+    fi
 }
 
-# ===================== 预留自定义步骤入口（用户可自行添加） =====================
-custom_step() {
-    echo -e "\033[33m=============================================\033[0m"
-    echo -e "\033[33m【自定义步骤入口】可在此处添加个性化配置\033[0m"
-    echo -e "\033[33m示例：安装额外依赖、配置代理、拉取自定义脚本\033[0m"
-    echo -e "\033[33m=============================================\033[0m"
-    # 👇👇👇 在此处添加你的自定义命令 👇👇👇
+# ==============================================================================
+# 自定义扩展入口 (用户可在此插入自定义逻辑)
+# ==============================================================================
 
-    # 👆👆👆 自定义命令结束 👆👆👆
+custom_pre_install() {
+    # 扩展点 1: 基础环境配置完成后、青龙安装前的自定义步骤
+    log_info "=========================================="
+    log_info "扩展点: 预安装自定义步骤"
+    log_info "=========================================="
+    
+    # 示例: 安装额外的系统依赖
+    # sudo apt-get install -y your-package
+    
+    # 示例: 配置自定义 hosts
+    # echo "127.0.0.1 custom.domain" | sudo tee -a /etc/hosts
+    
+    log_info "预安装步骤完成 (如需自定义，请编辑脚本中的 custom_pre_install 函数)"
 }
 
-# ===================== 部署完成提示 =====================
-finish_info() {
-    echo -e "\033[36m=============================================\033[0m"
-    echo -e "\033[36m🎉 青龙面板后端部署完成！\033[0m"
-    echo -e "\033[36m访问地址：http://localhost:${QL_PORT}\033[0m"
-    echo -e "\033[36mWSL访问：http://$(hostname -I | awk '{print $1}'):${QL_PORT}\033[0m"
-    echo -e "\033[36m初始账号：admin / 初始密码查看：cat ${QL_DATA_DIR}/config/auth.json\033[0m"
-    echo -e "\033[36m服务管理：pm2 start/stop/restart qinglong\033[0m"
-    echo -e "\033[36m日志查看：tail -f /var/log/qinglong.log\033[0m"
-    echo -e "\033[36m=============================================\033[0m"
+custom_post_install() {
+    # 扩展点 2: 青龙安装完成后、启动前的自定义步骤
+    log_info "=========================================="
+    log_info "扩展点: 安装后自定义步骤"
+    log_info "=========================================="
+    
+    # 示例: 下载自定义脚本到青龙目录
+    # git clone https://github.com/your-repo/scripts.git "${QL_DATA_DIR}/scripts/custom"
+    
+    # 示例: 预配置青龙面板设置
+    # tee "${QL_DATA_DIR}/config/config.sh" > /dev/null <<'EOF'
+    # export QL_PORT=5700
+    # export QL_WS_PORT=5600
+    # EOF
+    
+    log_info "安装后步骤完成 (如需自定义，请编辑脚本中的 custom_post_install 函数)"
 }
 
-# ===================== 主执行流程 =====================
+# ==============================================================================
+# 主执行流程
+# ==============================================================================
+
 main() {
-    clear
-    echo -e "\033[36m=============================================\033[0m"
-    echo -e "\033[36m青龙面板后端 WSL1 一键部署脚本\033[0m"
-    echo -e "\033[36m环境：Ubuntu 20.04 | 无Docker | 无Systemd\033[0m"
-    echo -e "\033[36m=============================================\033[0m"
-
-    check_root
-    change_apt_source
-    install_base_deps
-    change_pip_source
-    install_node
-    install_qinglong
-    install_pm2
-    custom_step
-    start_qinglong
-    finish_info
+    echo -e "${GREEN}"
+    cat <<'EOF'
+    ____       __                   __   ____________ 
+   / __ \_____/ /____  ____  ____  / /  / ____/ __ \
+  / / / / ___/ __/ _ \/ __ \/ __ \/ /  / / __/ / / /
+ / /_/ / /__/ /_/  __/ /_/ / /_/ / /  / /_/ / /_/ / 
+/_____/\___/\__/\___/ .___/\____/_/   \____/_____/ 
+                   /_/                              
+EOF
+    echo -e "${NC}"
+    
+    log_info "青龙面板 WSL1 一键部署脚本启动"
+    log_info "日志文件: ${LOG_FILE}"
+    
+    # 执行检测
+    check_wsl1
+    check_systemd
+    
+    # 确认安装
+    echo ""
+    read -p "确认开始安装青龙面板到 ${QL_DIR}? (Y/n): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]] && [[ -n "$REPLY" ]]; then
+        log_info "用户取消安装"
+        exit 0
+    fi
+    
+    # 执行安装步骤
+    step1_system_init
+    step2_install_nodejs
+    step3_install_python
+    step4_install_pnpm
+    
+    # 自定义扩展点 1
+    custom_pre_install
+    
+    step5_install_qinglong
+    
+    # 自定义扩展点 2
+    custom_post_install
+    
+    step6_setup_service
+    step7_initialize
+    
+    # 完成提示
+    echo ""
+    log_success "=========================================="
+    log_success "青龙面板部署完成!"
+    log_success "=========================================="
+    echo ""
+    log_info "安装目录: ${QL_DIR}"
+    log_info "数据目录: ${QL_DATA_DIR}"
+    log_info "访问地址: http://localhost:${QL_PORT}"
+    echo ""
+    log_info "管理命令:"
+    log_info "  启动: ${QL_DIR}/start.sh"
+    log_info "  停止: ${QL_DIR}/stop.sh"
+    log_info "  状态: ${QL_DIR}/status.sh"
+    echo ""
+    log_info "启动面板:"
+    log_info "  bash ${QL_DIR}/start.sh"
+    echo ""
+    log_warn "注意: WSL1 重启后需要手动重新启动青龙面板"
+    log_warn "建议: 在 Windows 启动文件夹创建快捷方式自动启动"
+    echo ""
+    log_info "详细日志: ${LOG_FILE}"
 }
 
-# 执行主程序
-main
+# 错误处理
+trap 'log_error "脚本执行中断，请检查日志: ${LOG_FILE}"; exit 1' ERR INT TERM
+
+# 执行主函数
+main "$@"

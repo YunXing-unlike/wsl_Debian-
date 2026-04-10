@@ -77,32 +77,46 @@ install_base_deps() {
     apt-get update -y
     
     log_info "安装系统基础工具..."
-    apt-get install -y \
-        curl \
-        wget \
-        git \
-        vim \
-        nano \
-        htop \
-        unzip \
-        jq \
-        cron \
-        build-essential \
-        libssl-dev \
-        libffi-dev \
-        python3-dev \
-        python3-venv \
-        python3-pip
+apt-get install -y \
+    curl \
+    wget \
+    git \
+    vim \
+    nano \
+    htop \
+    unzip \
+    jq \
+    cron \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    python3-venv \
+    python3-pip \
+    g++ \
+    make \
+    python3 \
+    pkg-config \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev
     
     log_info "基础依赖安装完成"
 }
 
 # 安装Node.js环境
 install_nodejs() {
-    log_info "安装Node.js 18.x LTS版本..."
+    log_info "安装Node.js 20.x LTS版本（青龙面板兼容版本）..."
     
-    # 使用NodeSource安装Node.js 18.x
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+    # 卸载旧版本Node.js（如果已安装）
+    apt-get remove -y nodejs
+    apt-get autoremove -y
+    
+    # 使用NodeSource安装Node.js 20.x
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get update
     apt-get install -y nodejs
     
     # 验证安装
@@ -157,12 +171,25 @@ install_pnpm() {
 install_qinglong() {
     log_info "安装青龙面板..."
     
-    # 全局安装青龙面板
-    npm install -g @whyour/qinglong@latest
+    # 全局安装node-gyp（必需的原生模块构建工具）
+    log_info "安装原生模块构建工具..."
+    npm install -g node-gyp
+    
+    # 安装必要的Node.js构建依赖
+    npm install -g node-pre-gyp
+    
+    # 使用pnpm安装青龙面板（更稳定）
+    log_info "使用pnpm安装青龙面板..."
+    pnpm add -g @whyour/qinglong@latest
+    
+    # 备用方案：如果pnpm安装失败，使用npm强制安装
+    if [ $? -ne 0 ]; then
+        log_warn "pnpm安装失败，尝试npm安装..."
+        npm install -g @whyour/qinglong@latest --force
+    fi
     
     log_info "青龙面板安装完成"
 }
-
 # 初始化青龙面板
 init_qinglong() {
     log_info "初始化青龙面板..."

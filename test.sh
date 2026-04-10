@@ -114,8 +114,6 @@ install_nodejs() {
     # 配置npm国内镜像源
     log_info "配置npm国内镜像源..."
     npm config set registry https://registry.npmmirror.com/
-    npm config set sass_binary_site https://npmmirror.com/mirrors/node-sass/
-    npm config set electron_mirror https://npmmirror.com/mirrors/electron/
     
     log_info "Node.js环境配置完成"
 }
